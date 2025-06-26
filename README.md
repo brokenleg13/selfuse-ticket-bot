@@ -3,6 +3,18 @@
 <br>
 </div>
 
+## FolkDes:
+### feat：
+- YES24刷票自用适配版 twice抢票适配
+- 配合油猴脚本实现锁座一直到信用卡付款操作
+- 填写WEBHOOK_URL可实现刷票成功飞书通知
+
+### how to use
+- ticket-bot-plugin文件夹拖到chrome插件安装，按照源项目步骤配置
+- 添加TampermonkeyScript目录下的两个油猴脚本并启用
+- 部分配置项请看 ticket-bot-plugin/scripts/yes24/seat.js 文件开头自行修改
+- 点开Booking后进入选座网站将自动运行脚本
+
 ## :notebook: Description :notebook:
 
 This Chrome extension streamlines the process of finding and booking concert tickets on popular Korean platforms. such as <a href="https://tkglobal.melon.com/main/index.htm?langCd=EN">Melon Ticket</a>, <a href="http://ticket.yes24.com/English">Yes24</a> and <a href="https://www.globalinterpark.com/?lang=en">Interpark</a>. The extension includes a user-friendly popup with the ability to register for automatic booking. Once a concert page is opened, the extension automates the process, ensuring a hassle-free experience in securing a seat for the event.
