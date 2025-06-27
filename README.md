@@ -4,6 +4,12 @@
 </div>
 
 ## FolkDes:
+
+### 2025-06-27 update
+- 换了个更高效的方法，接口直接爬取座位数据；
+需要打开`ticket-bot-plugin/scripts/yes24/seatv2.js`文件手动填写USERID
+- USERID可在选区接口里查到，idCustomer字段即是
+
 ### feat：
 - YES24刷票自用适配版 twice抢票适配
 - 配合油猴脚本实现锁座一直到信用卡付款操作
