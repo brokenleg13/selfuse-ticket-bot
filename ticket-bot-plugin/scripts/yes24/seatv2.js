@@ -4,7 +4,8 @@ let blockSelect = [301,302,303,306,307,308,311,312,313,316,317,318,101,102,103,1
 let SEAT_MAX_CLICK_COUNT = 30; // 单个座位最大点击次数
 let WEBHOOK_URL = ''; // 飞书webhook url
 let USERID = ''; // 用户id 抓包自己看
-let MAX_SEAT_ID = 9999; // 每个区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
+let MAX_SEAT_ID = 200; // 每个区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
+let REFRESH_INTERVAL = 800; // 刷新时间间隔 根据网络调整
 
 
 /*--------------------------------- 勿修改 ---------------------------------*/
@@ -13,6 +14,7 @@ let currentSeatLayer = null;
 let blackList = [];
 let concertcfg = {};// 存储当前页面的concertcfg
 concertcfg.idCustomer = USERID // idCustomer
+let hasLockSuccess = false;
 
 let seatQueue = [];// 可选座位队列
 function addSeatToQueue(seat) {
@@ -136,6 +138,89 @@ async function sendSearchSeatRequest(block) {
         });
 }
 
+async function sendSeatLockRequest(block,seatId) {
+    if (hasLockSuccess) {
+        return;
+    }
+    console.log(`[DEBUG] 开始发送Lock请求，区块: ${block} 座位ID: ${seatId}`);
+
+    const url = 'https://ticket.yes24.com/OSIF/Book.asmx/Lock';
+    let cookie = getCookie();
+
+    console.log(`[DEBUG] Cookie长度: ${cookie ? cookie.length : 0}`);
+    console.log(`[DEBUG] URL: ${url}`);
+
+    const body = new URLSearchParams({
+        name: concertcfg.idCustomer,
+        idTime: concertcfg.idTime,
+        token:seatId,
+        block: block,
+        channel: '1024',
+        organizationID: '1'
+    });
+
+    console.log(`[DEBUG] 请求体:`, body.toString());
+
+    const headers = {
+        'Host': 'ticket.yes24.com',
+        'Connection': 'keep-alive',
+        'Content-Length': '85',
+        'X-Requested-With': 'XMLHttpRequest',
+        'User-Agent': navigator.userAgent,
+        'Accept': 'application/xml, text/xml, */*; q=0.01',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Origin': 'https://ticket.yes24.com',
+        'Referer': `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`,
+        'Accept-Encoding': 'gzip, deflate',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Cookie': cookie
+    };
+
+    console.log(`[DEBUG] 准备发送fetch请求...`);
+
+    // 发送请求
+    fetch(url, {
+        method: 'POST',
+        headers: headers,
+        body: body,
+        credentials: 'include',
+    })
+        .then(response => response.text())
+        .then(data => {
+            console.log(`[DEBUG] Lock响应数据:`, data);
+            
+            // 解析XML响应
+            const codeMatch = data.match(/<Code>(.*?)<\/Code>/);
+            const messageMatch = data.match(/<Message>(.*?)<\/Message>/);
+            
+            if (codeMatch) {
+                const code = codeMatch[1];
+                const message = messageMatch ? messageMatch[1] : '';
+                
+                console.log(`[DEBUG] 响应Code: ${code}, Message: ${message}`);
+                
+                if (code === 'None') {
+                    hasLockSuccess = true;
+                    console.log(`[YES24 Success] 座位锁定成功: ${seatId}`);
+                    isSuccess = true; // 设置成功标志
+                    sendFeiShuMsg(WEBHOOK_URL, `座位锁定成功: block:${block} seat:${seatId}`);
+                } else if (code === 'block') {
+                    console.error(`[YES24 Error] 被block 需要验证码`);
+                    sendFeiShuMsg(WEBHOOK_URL, `被block: block:${block} seat:${seatId}`);
+                } else {
+                    console.error(`[YES24 Error] 锁定失败: Code=${code}, Message=${message}`);
+                    sendFeiShuMsg(WEBHOOK_URL, `锁定失败: block:${block} seat:${seatId} Code=${code} Message=${message}`);
+                }
+            } else {
+                console.error(`[YES24 Error] 无法解析响应:`, data);
+            }
+        })
+        .catch(err => {
+            console.error(`[YES24 Error] Lock请求失败:`, err.message);
+            sendFeiShuMsg(WEBHOOK_URL, `Lock请求失败: block:${block} seat:${seatId} Error=${err.message}`);
+        });
+}
+
 function parseResponse(xmlString) {
     // 使用正则表达式解析XML，避免使用DOMParser
 
@@ -157,13 +242,17 @@ function parseResponse(xmlString) {
                 const seatInfo = seatData.split('@');
                 if (seatInfo.length > 0) {
                     const seatId = seatInfo[0];
+                    const chooseable = seatInfo[2];
 
                     let seat = {};
                     seat.id = seatId;
                     seat.block = block;
                     //不在blacklst的加入，且座位号不超过200
                     if (!blackList.some(blackSeat => blackSeat === seatId)) {
-                        addSeatToQueue(seat);
+                        addSeatToQueue(seat);                
+                        // 只在这里调用一次锁座接口，避免重复调用
+                        console.log(`[YES24 info] 发现可用座位，尝试锁定: block:${block} seat:${seatId}`);
+                        sendSeatLockRequest(block, seatId);
                         sendFeiShuMsg(WEBHOOK_URL,`刷到座位 block:${block} seat:${seat.id}`)
                     }
                 }
@@ -340,10 +429,11 @@ async function getSeat(block, seatId) {
                 return true;
             }
         }
-        else {
-            // 如果座位还是选中状态 刷新页面
-            await enterPage(block);
-        }
+        await sleep(500);
+        // 尝试接口锁位置
+        sendSeatLockRequest(block,seatId);
+        // 如果座位还是选中状态 刷新页面
+        await enterPage(block);
     }
     removeSeatFromQueue();
     return false;
@@ -357,7 +447,7 @@ async function searchSeat() {
     let requestCount = 0;
     await sleep(1000);
     while (!isSuccess) {
-        if (seatQueue.length > 10) {
+        if (seatQueue.length > 0) {
             await sleep(300);
             continue;
         }
@@ -365,9 +455,9 @@ async function searchSeat() {
         sendSearchSeatRequest(blockSelect[i]);
         i = (i + 1) % blockSelect.length;
         requestCount++;
-        if (requestCount % 10 === 0) {
+        if (requestCount % 8 === 0) {
             requestCount = 0;
-            await sleep(800);
+            await sleep(REFRESH_INTERVAL);
         }
     }
 }
@@ -398,6 +488,13 @@ async function lockSeat() {
     clickStepCtrlBtn04();
     await sleep(1000);
     // openPayment();
+}
+
+function testAddSeatToQueue(block,seatId){
+    let seat = {};
+    seat.id = seatId;
+    seat.block = block;
+    addSeatToQueue(seat);   
 }
 
 lockSeat();
