@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         One-Time Click via localStorage Event
+// @name         One-Time Click via Custom Event
 // @namespace    http://tampermonkey.net/
 // @version      1.0
-// @description  通过设置 localStorage CLICK_NOW=YES 来点击一次按钮
+// @description  通过自定义事件 tampermonkey-click 来点击一次按钮
 // @match        http*://*.yes24.com/*
 // @grant        none
 // ==/UserScript==
@@ -10,20 +10,32 @@
 (function () {
     'use strict';
 
-    // 监听 localStorage 改变事件
+    // 监听自定义事件
+    window.addEventListener("tampermonkey-click", (event) => {
+        console.log("🎯 收到点击事件:", event.detail);
+
+        // 尝试点击按钮
+        const btn = window.frames[0].document.querySelector('img.booking[src*="btn_booking2.gif"]');
+        if (btn) {
+            btn.click();
+            console.log("✅ 已点击按钮");
+        } else {
+            console.log("❌ 未找到按钮");
+        }
+    });
+
+    // 也保留storage事件监听作为备用方案
     window.addEventListener("storage", (event) => {
         if (event.key === "CLICK_NOW" && event.newValue === "YES") {
-            // 尝试点击按钮
+            console.log("🔄 通过storage事件触发点击");
             const btn = document.querySelector('img.booking[src*="btn_booking2.gif"]');
             if (btn) {
                 btn.click();
                 console.log("✅ 已点击按钮");
-            } else {
-                console.log("❌ 未找到按钮");
             }
-
-            // 清除标志，避免重复触发
             localStorage.removeItem("CLICK_NOW");
         }
     });
+
+    console.log("🚀 油猴脚本已加载，等待点击事件...");
 })();

@@ -1,11 +1,11 @@
 /*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
 let seatSelect = []; // 没用 todo:增加自定义选座
-let blockSelect = [306, 307, 308, 316, 317, 318,302,312,302,312]; // 自定义选区
+let blockSelect = [301,302,303,306,307,308,311,312,313,316,317,318,101,102,103,104,105,106]; // 自定义选区
 let SEAT_MAX_CLICK_COUNT = 30; // 单个座位最大点击次数
 let WEBHOOK_URL = ''; // 飞书webhook url
 let USERID = ''; // 用户id 抓包自己看
-let MAX_SEAT_ID = 200; // 每个区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
-let REFRESH_INTERVAL = 600; // 刷新时间间隔 根据网络调整
+let MAX_SEAT_ID = 200; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
+let REFRESH_INTERVAL = 800; // 刷新时间间隔 根据网络调整
 
 
 /*--------------------------------- 勿修改 ---------------------------------*/
@@ -62,7 +62,11 @@ async function selectDate(data) {
 }
 
 function TampermonkeyClick() {
-    localStorage.setItem("CLICK_NOW", "YES");
+    // 直接触发自定义事件，而不是依赖storage事件
+    const clickEvent = new CustomEvent('tampermonkey-click', {
+        detail: { timestamp: Date.now() }
+    });
+    window.dispatchEvent(clickEvent);
 }
 
 
@@ -134,9 +138,10 @@ function assertLockSuccess() {
     const el = frame.querySelector('#StepCtrlBtn03');
     if (el && el.style.display === 'block') {
         console.log('✅ class 正确：m03 on');
-        isSuccess = true;
+        return true;
     } else {
         console.log('❌ class 不匹配');
+        return false;
     }
 }
 
@@ -162,9 +167,6 @@ function selectRange(idx) {
 }
 
 async function enterPage(block) {
-    if (isSuccess) {
-        return;
-    }
     let frame = theFrame();
     let seatLayer = frame.getElementsByClassName("seat_layer");
 
@@ -224,13 +226,11 @@ async function chooseSeatAndGotoPayment(block,seatId) {
         if (!seat.className.includes("son")) {
             seat.click();
         }
-        await sleep(300);
-        TampermonkeyClick();
-        await sleep(1500);
-        assertLockSuccess();
-        if (isSuccess) {
-            return true;
-        }
+        await sleep(500);
+        // while(!assertLockSuccess()){
+            TampermonkeyClick();
+            await sleep(1000);
+        // }
     }
 }
 // endregion
@@ -420,33 +420,18 @@ function parseLayoutData(xmlString) {
                 const valueMatch = divHtml.match(/value="([^"]+)"/);
                 
                 if (idMatch && valueMatch) {
-                    const seatId = valueMatch[1];
-                    const seatElement = {
-                        id: idMatch[1],
-                        seatId: seatId,
-                        sortIndex: sortIndex
-                    };
-                    
-                    // 解析style中的位置信息
-                    if (styleMatch) {
-                        const style = styleMatch[1];
-                        const leftMatch = style.match(/LEFT:\s*(\d+)px/);
-                        const topMatch = style.match(/TOP:\s*(\d+)px/);
-                        
-                        if (leftMatch) seatElement.left = parseInt(leftMatch[1]);
-                        if (topMatch) seatElement.top = parseInt(topMatch[1]);
-                    }
-                    
+                    let seatId = idMatch[1];
                     // 存储到layoutSortById对象中，key为座位ID，value为递增序号
                     layoutSortById[seatId] = sortIndex;
-                    
                     sortIndex++; // 递增序号
                 }
             });
             
-            // console.log(`[DEBUG] layoutSortById对象:`, layoutSortById);
+            console.log(`[DEBUG] layoutSortById对象:`, layoutSortById);
         }
     }
+    
+    return layoutSortById; // 添加return语句
 }
 
 function parseResponse(xmlString) {
@@ -481,10 +466,10 @@ function parseResponse(xmlString) {
                     seat.id = seatId;
                     seat.block = block;
                     
-                    let seatElement = layoutSortById[seatId];
+                    let seatElementIdx = layoutSortById[seatId];
                     // 检查是否站票超过ID最大值
-                    if (seatElement && seatElement.sortIndex > MAX_SEAT_ID && block.toString().startsWith("1")) {
-                        sendFeiShuMsg(WEBHOOK_URL, `站票超过ID最大值，不锁票 block:${block} seat:${seatId} index:${seatElement.sortIndex}`)
+                    if (seatElementIdx && seatElementIdx > MAX_SEAT_ID && block.toString().startsWith("1")) {
+                        sendFeiShuMsg(WEBHOOK_URL, `站票超过ID最大值，不锁票 block:${block} seat:${seatId} index:${seatElementIdx}`)
                         return;
                     }
                     
@@ -538,7 +523,7 @@ async function trySecondSeat(){
     if (seatQueue.length == 0 && secondSeatQueue.length > 0 && !isSuccess) {
         let seat = secondSeatQueue.shift();
         if (seat) {
-            sendSeatLockRequest(seat.block,seat.id,false)
+            sendSeatLockRequest(seat.block,seat.id,true)
             await sleep(2000);
         }
     }
@@ -560,13 +545,13 @@ async function lockSeat() {
                 await sendSeatLockRequest(seat.block,seat.id,true)
             }
             popSeatFromQueue();
-            await sleep(300)
+            await sleep(400)
         }else{
             await sleep(10);
         }
     }
     // 接口锁成功的处理一下选座
-    sendFeiShuMsg(WEBHOOK_URL, `抢票成功`);
+    sendFeiShuMsg(WEBHOOK_URL, `抢票成功 successBlock:${successBlock} successId:${successId}`);
     await chooseSeatAndGotoPayment(successBlock,successId);
     await sleep(1000);
     clickStepCtrlBtn03();
