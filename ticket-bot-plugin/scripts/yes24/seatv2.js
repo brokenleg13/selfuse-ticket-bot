@@ -1,11 +1,11 @@
 /*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
 let seatSelect = []; // 没用 todo:增加自定义选座
-let blockSelect = [301,302,303,306,307,308,311,312,313,316,317,318,101,102,103,104,105,106]; // 自定义选区
+let blockSelect = [306, 307, 308, 316, 317, 318,302,312,302,312]; // 自定义选区
 let SEAT_MAX_CLICK_COUNT = 30; // 单个座位最大点击次数
 let WEBHOOK_URL = ''; // 飞书webhook url
 let USERID = ''; // 用户id 抓包自己看
 let MAX_SEAT_ID = 200; // 每个区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
-let REFRESH_INTERVAL = 800; // 刷新时间间隔 根据网络调整
+let REFRESH_INTERVAL = 600; // 刷新时间间隔 根据网络调整
 
 
 /*--------------------------------- 勿修改 ---------------------------------*/
@@ -14,9 +14,12 @@ let currentSeatLayer = null;
 let blackList = [];
 let concertcfg = {};// 存储当前页面的concertcfg
 concertcfg.idCustomer = USERID // idCustomer
-let hasLockSuccess = false;
+let successBlock = "";
+let successId = "";
 
+// region 队列
 let seatQueue = [];// 可选座位队列
+let secondSeatQueue = [];// 被锁过的座位队列 碰运气
 function addSeatToQueue(seat) {
     seatQueue.push(seat);
 }
@@ -25,10 +28,13 @@ function getSeatFromQueue() {
     return seatQueue[0];
 }
 
-function removeSeatFromQueue() {
-    seatQueue.shift()
+function popSeatFromQueue() {
+    return seatQueue.shift()
 }
+// endregion
 
+
+//region 页面操作
 function getConcertId() {
     let url = window.location.href;
     let concertId = url.split("=")[1];
@@ -66,199 +72,6 @@ function theFrame() {
 
 function theTopWindow() {
     return window.document;
-}
-
-async function sendSearchSeatRequest(block) {
-    console.log(`[DEBUG] 开始发送请求，区块: ${block}`);
-
-    // 检查必要参数
-    if (!concertcfg.idHall || !concertcfg.idTime || !concertcfg.idCustomer) {
-        console.error('[DEBUG] 缺少必要参数:', {
-            idHall: concertcfg.idHall,
-            idTime: concertcfg.idTime,
-            idCustomer: concertcfg.idCustomer
-        });
-        return;
-    }
-
-    const url = 'https://ticket.yes24.com/OSIF/Book.asmx/GetBookWholeFN';
-    let cookie = getCookie();
-
-    console.log(`[DEBUG] Cookie长度: ${cookie ? cookie.length : 0}`);
-    console.log(`[DEBUG] URL: ${url}`);
-
-    const body = new URLSearchParams({
-        idHall: concertcfg.idHall,
-        idTime: concertcfg.idTime,
-        block: block,
-        channel: '1',
-        idCustomer: concertcfg.idCustomer,
-        idOrg: '1'
-    });
-
-    console.log(`[DEBUG] 请求体:`, body.toString());
-
-    const headers = {
-        'Host': 'ticket.yes24.com',
-        'Connection': 'keep-alive',
-        'Content-Length': '85',
-        'X-Requested-With': 'XMLHttpRequest',
-        'User-Agent': navigator.userAgent,
-        'Accept': 'application/xml, text/xml, */*; q=0.01',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Origin': 'https://ticket.yes24.com',
-        'Referer': `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`,
-        'Accept-Encoding': 'gzip, deflate',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
-        'Cookie': cookie
-    };
-
-    console.log(`[DEBUG] 准备发送fetch请求...`);
-
-    // 发送请求
-    fetch(url, {
-        method: 'POST',
-        headers: headers,
-        body: body,
-        credentials: 'include',
-    })
-        .then(response => response.text())
-        .then(data => {
-            console.log(`[DEBUG] 响应数据长度:`, data.length);
-            parseResponse(data);
-            console.log(`[YES24 info] Block ${block} 请求成功`);
-        })
-        .catch(err => {
-            console.error(`[YES24 Error] Block ${block} 请求失败:`, err.message);
-            console.error(`[DEBUG] 错误详情:`, err);
-            // 如果是超时或网络错误，可以考虑重试
-            if (err.message.includes('超时') || err.message.includes('Failed to fetch')) {
-                console.log(`[YES24 info] Block ${block} 将在下次循环中重试`);
-            }
-        });
-}
-
-async function sendSeatLockRequest(block,seatId) {
-    if (hasLockSuccess) {
-        return;
-    }
-    console.log(`[DEBUG] 开始发送Lock请求，区块: ${block} 座位ID: ${seatId}`);
-
-    const url = 'https://ticket.yes24.com/OSIF/Book.asmx/Lock';
-    let cookie = getCookie();
-
-    console.log(`[DEBUG] Cookie长度: ${cookie ? cookie.length : 0}`);
-    console.log(`[DEBUG] URL: ${url}`);
-
-    const body = new URLSearchParams({
-        name: concertcfg.idCustomer,
-        idTime: concertcfg.idTime,
-        token:seatId,
-        block: block,
-        channel: '1024',
-        organizationID: '1'
-    });
-
-    console.log(`[DEBUG] 请求体:`, body.toString());
-
-    const headers = {
-        'Host': 'ticket.yes24.com',
-        'Connection': 'keep-alive',
-        'Content-Length': '85',
-        'X-Requested-With': 'XMLHttpRequest',
-        'User-Agent': navigator.userAgent,
-        'Accept': 'application/xml, text/xml, */*; q=0.01',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Origin': 'https://ticket.yes24.com',
-        'Referer': `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`,
-        'Accept-Encoding': 'gzip, deflate',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
-        'Cookie': cookie
-    };
-
-    console.log(`[DEBUG] 准备发送fetch请求...`);
-
-    // 发送请求
-    fetch(url, {
-        method: 'POST',
-        headers: headers,
-        body: body,
-        credentials: 'include',
-    })
-        .then(response => response.text())
-        .then(data => {
-            console.log(`[DEBUG] Lock响应数据:`, data);
-            
-            // 解析XML响应
-            const codeMatch = data.match(/<Code>(.*?)<\/Code>/);
-            const messageMatch = data.match(/<Message>(.*?)<\/Message>/);
-            
-            if (codeMatch) {
-                const code = codeMatch[1];
-                const message = messageMatch ? messageMatch[1] : '';
-                
-                console.log(`[DEBUG] 响应Code: ${code}, Message: ${message}`);
-                
-                if (code === 'None') {
-                    hasLockSuccess = true;
-                    console.log(`[YES24 Success] 座位锁定成功: ${seatId}`);
-                    isSuccess = true; // 设置成功标志
-                    sendFeiShuMsg(WEBHOOK_URL, `座位锁定成功: block:${block} seat:${seatId}`);
-                } else if (code === 'block') {
-                    console.error(`[YES24 Error] 被block 需要验证码`);
-                    sendFeiShuMsg(WEBHOOK_URL, `被block: block:${block} seat:${seatId}`);
-                } else {
-                    console.error(`[YES24 Error] 锁定失败: Code=${code}, Message=${message}`);
-                    sendFeiShuMsg(WEBHOOK_URL, `锁定失败: block:${block} seat:${seatId} Code=${code} Message=${message}`);
-                }
-            } else {
-                console.error(`[YES24 Error] 无法解析响应:`, data);
-            }
-        })
-        .catch(err => {
-            console.error(`[YES24 Error] Lock请求失败:`, err.message);
-            sendFeiShuMsg(WEBHOOK_URL, `Lock请求失败: block:${block} seat:${seatId} Error=${err.message}`);
-        });
-}
-
-function parseResponse(xmlString) {
-    // 使用正则表达式解析XML，避免使用DOMParser
-
-    // 获取 Block 值
-    const blockMatch = xmlString.match(/<Block>(.*?)<\/Block>/);
-    const block = blockMatch ? blockMatch[1] : null;
-
-    // 获取 BlockSeat 内容
-    const blockSeatMatch = xmlString.match(/<BlockSeat>(.*?)<\/BlockSeat>/);
-    const blockSeatData = blockSeatMatch ? blockSeatMatch[1] : "";
-
-    if (blockSeatData) {
-        // 使用 ^ 分割每个座位数据
-        const seats = blockSeatData.split('^');
-
-        seats.forEach(seatData => {
-            if (seatData.trim()) {
-                // 使用 @ 分割座位信息，第一个是座位ID
-                const seatInfo = seatData.split('@');
-                if (seatInfo.length > 0) {
-                    const seatId = seatInfo[0];
-                    const chooseable = seatInfo[2];
-
-                    let seat = {};
-                    seat.id = seatId;
-                    seat.block = block;
-                    //不在blacklst的加入，且座位号不超过200
-                    if (!blackList.some(blackSeat => blackSeat === seatId)) {
-                        addSeatToQueue(seat);                
-                        // 只在这里调用一次锁座接口，避免重复调用
-                        console.log(`[YES24 info] 发现可用座位，尝试锁定: block:${block} seat:${seatId}`);
-                        sendSeatLockRequest(block, seatId);
-                        sendFeiShuMsg(WEBHOOK_URL,`刷到座位 block:${block} seat:${seat.id}`)
-                    }
-                }
-            }
-        });
-    }
 }
 
 // 获取cookie
@@ -349,6 +162,9 @@ function selectRange(idx) {
 }
 
 async function enterPage(block) {
+    if (isSuccess) {
+        return;
+    }
     let frame = theFrame();
     let seatLayer = frame.getElementsByClassName("seat_layer");
 
@@ -397,48 +213,300 @@ async function enterPage(block) {
     }
 }
 
-async function getSeat(block, seatId) {
+// 接口锁定后 选择座位 去支付
+async function chooseSeatAndGotoPayment(block,seatId) {
+    await enterPage(block);
+    await sleep(400);
     let frame = theFrame();
-    let seatArray = frame.getElementById("divSeatArray").children;
-    for (let i = 0; i < seatArray.length; i++) {
-        let seat = seatArray[i];
-        // 大于200的不要
-        if (seat.id === "t" + seatId.toString() && i > MAX_SEAT_ID) {
-            sendFeiShuMsg(WEBHOOK_URL, `超过ID最大值，不锁票 block:${block} seat:${seatId} index:${i}`)
-            blackList.push(seatId)
-            removeSeatFromQueue();
-            return false;
+    let seat = frame.getElementById("t" + seatId.toString());
+    if (seat && !seat.className.includes("s13")) {
+        // 如果seat的class不包含son，则点击 son说明已选中
+        if (!seat.className.includes("son")) {
+            seat.click();
+        }
+        await sleep(300);
+        TampermonkeyClick();
+        await sleep(1500);
+        assertLockSuccess();
+        if (isSuccess) {
+            return true;
         }
     }
-    // 尝试锁定座位
-    for (let j = 0; j < SEAT_MAX_CLICK_COUNT; j++) {
-        let frame = theFrame();
-        let seat = frame.getElementById("t" + seatId.toString());
-        console.error(seat)
-        if (seat && !seat.className.includes("s13")) {
-            // 如果seat的class不包含son，则点击 son说明已选中
-            if (!seat.className.includes("son")) {
-                seat.click();
-            }
-            await sleep(200);
-            TampermonkeyClick();
-            await sleep(1500);
-            assertLockSuccess();
-            if (isSuccess) {
-                removeSeatFromQueue();
-                return true;
-            }
-        }
-        await sleep(500);
-        // 尝试接口锁位置
-        sendSeatLockRequest(block,seatId);
-        // 如果座位还是选中状态 刷新页面
-        await enterPage(block);
+}
+// endregion
+
+//region 接口操作
+
+async function sendSearchSeatRequest(block) {
+    console.log(`[DEBUG] 开始发送请求，区块: ${block}`);
+
+    // 检查必要参数
+    if (!concertcfg.idHall || !concertcfg.idTime || !concertcfg.idCustomer) {
+        console.error('[DEBUG] 缺少必要参数:', {
+            idHall: concertcfg.idHall,
+            idTime: concertcfg.idTime,
+            idCustomer: concertcfg.idCustomer
+        });
+        return;
     }
-    removeSeatFromQueue();
-    return false;
+
+    const url = 'https://ticket.yes24.com/OSIF/Book.asmx/GetBookWholeFN';
+    let cookie = getCookie();
+
+    console.log(`[DEBUG] Cookie长度: ${cookie ? cookie.length : 0}`);
+    console.log(`[DEBUG] URL: ${url}`);
+
+    const body = new URLSearchParams({
+        idHall: concertcfg.idHall,
+        idTime: concertcfg.idTime,
+        block: block,
+        channel: '1',
+        idCustomer: concertcfg.idCustomer,
+        idOrg: '1'
+    });
+
+    console.log(`[DEBUG] 请求体:`, body.toString());
+
+    const headers = {
+        'Host': 'ticket.yes24.com',
+        'Connection': 'keep-alive',
+        'Content-Length': '85',
+        'X-Requested-With': 'XMLHttpRequest',
+        'User-Agent': navigator.userAgent,
+        'Accept': 'application/xml, text/xml, */*; q=0.01',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Origin': 'https://ticket.yes24.com',
+        'Referer': `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`,
+        'Accept-Encoding': 'gzip, deflate',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Cookie': cookie
+    };
+
+    console.log(`[DEBUG] 准备发送fetch请求...`);
+
+    // 发送请求
+    fetch(url, {
+        method: 'POST',
+        headers: headers,
+        body: body,
+        credentials: 'include',
+    })
+        .then(response => response.text())
+        .then(data => {
+            console.log(`[DEBUG] 响应数据长度:`, data.length);
+            parseResponse(data);
+            console.log(`[YES24 info] Block ${block} 请求成功`);
+        })
+        .catch(err => {
+            console.error(`[YES24 Error] Block ${block} 请求失败:`, err.message);
+            console.error(`[DEBUG] 错误详情:`, err);
+            // 如果是超时或网络错误，可以考虑重试
+            if (err.message.includes('超时') || err.message.includes('Failed to fetch')) {
+                console.log(`[YES24 info] Block ${block} 将在下次循环中重试`);
+            }
+        });
 }
 
+async function sendSeatLockRequest(block,seatId,sendmsg=false) {
+    if (isSuccess) {
+        return;
+    }
+    
+    console.log(`[DEBUG] 开始发送Lock请求，区块: ${block} 座位ID: ${seatId}`);
+
+    const url = 'https://ticket.yes24.com/OSIF/Book.asmx/Lock';
+    let cookie = getCookie();
+
+    console.log(`[DEBUG] Cookie长度: ${cookie ? cookie.length : 0}`);
+    console.log(`[DEBUG] URL: ${url}`);
+
+    const body = new URLSearchParams({
+        name: concertcfg.idCustomer,
+        idTime: concertcfg.idTime,
+        token:seatId,
+        block: block,
+        channel: '1024',
+        organizationID: '1'
+    });
+
+    console.log(`[DEBUG] 请求体:`, body.toString());
+
+    const headers = {
+        'Host': 'ticket.yes24.com',
+        'Connection': 'keep-alive',
+        'Content-Length': '85',
+        'X-Requested-With': 'XMLHttpRequest',
+        'User-Agent': navigator.userAgent,
+        'Accept': 'application/xml, text/xml, */*; q=0.01',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Origin': 'https://ticket.yes24.com',
+        'Referer': `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`,
+        'Accept-Encoding': 'gzip, deflate',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Cookie': cookie
+    };
+
+    console.log(`[DEBUG] 准备发送fetch请求...`);
+
+    // 发送请求
+    fetch(url, {
+        method: 'POST',
+        headers: headers,
+        body: body,
+        credentials: 'include',
+    })
+        .then(response => response.text())
+        .then(data => {
+            console.log(`[DEBUG] Lock响应数据:`, data);
+            
+            // 解析XML响应
+            const codeMatch = data.match(/<Code>(.*?)<\/Code>/);
+            const messageMatch = data.match(/<Message>(.*?)<\/Message>/);
+            
+            if (codeMatch) {
+                const code = codeMatch[1];
+                const message = messageMatch ? messageMatch[1] : '';
+                
+                console.log(`[DEBUG] 响应Code: ${code}, Message: ${message}`);
+                
+                if (code === 'None') {
+                    isSuccess = true; // 设置成功标志
+                    successBlock = block;
+                    successId = seatId;
+                    console.log(`[YES24 Success] 座位锁定成功: ${seatId}`);
+                    sendFeiShuMsg(WEBHOOK_URL, `座位接口锁定成功: block:${block} seat:${seatId}`);
+                } else if (code === 'block') {
+                    console.error(`[YES24 Error] 被block 需要验证码`);
+                    sendFeiShuMsg(WEBHOOK_URL, `被block: block:${block} seat:${seatId}`);
+                } else {
+                    console.error(`[YES24 Error] 锁定失败: Code=${code}, Message=${message}`);
+                    if (sendmsg) {
+                        sendFeiShuMsg(WEBHOOK_URL, `锁定失败: block:${block} seat:${seatId} Code=${code} Message=${message}`);
+                    }
+                }
+            } else {
+                console.error(`[YES24 Error] 无法解析响应:`, data);
+            }
+        })
+        .catch(err => {
+            console.error(`[YES24 Error] Lock请求失败:`, err.message);
+            sendFeiShuMsg(WEBHOOK_URL, `Lock请求失败: block:${block} seat:${seatId} Error=${err.message}`);
+        })
+}
+
+function parseLayoutData(xmlString) {
+    // 解析Layout数据，提取座位信息
+    console.log(`[DEBUG] 开始解析Layout数据...`);
+    
+    // 获取Layout内容
+    const layoutMatch = xmlString.match(/<Layout>(.*?)<\/Layout>/s);
+    const layoutData = layoutMatch ? layoutMatch[1] : "";
+    
+    let layoutSortById = {}; // 存储座位ID和递增序号的对应关系
+    
+    if (layoutData) {
+        
+        // 使用正则表达式匹配所有DIV元素
+        const divRegex = /&lt;DIV[^&]*?&gt;&lt;\/DIV&gt;/g;
+        const divMatches = layoutData.match(divRegex);
+        
+        if (divMatches) {
+            let sortIndex = 1; // 递增序号从1开始
+            
+            divMatches.forEach(divHtml => {
+                // 解析每个DIV的属性
+                const idMatch = divHtml.match(/id=([^&\s]+)/);
+                const styleMatch = divHtml.match(/style="([^"]+)"/);
+                const valueMatch = divHtml.match(/value="([^"]+)"/);
+                
+                if (idMatch && valueMatch) {
+                    const seatId = valueMatch[1];
+                    const seatElement = {
+                        id: idMatch[1],
+                        seatId: seatId,
+                        sortIndex: sortIndex
+                    };
+                    
+                    // 解析style中的位置信息
+                    if (styleMatch) {
+                        const style = styleMatch[1];
+                        const leftMatch = style.match(/LEFT:\s*(\d+)px/);
+                        const topMatch = style.match(/TOP:\s*(\d+)px/);
+                        
+                        if (leftMatch) seatElement.left = parseInt(leftMatch[1]);
+                        if (topMatch) seatElement.top = parseInt(topMatch[1]);
+                    }
+                    
+                    // 存储到layoutSortById对象中，key为座位ID，value为递增序号
+                    layoutSortById[seatId] = sortIndex;
+                    
+                    sortIndex++; // 递增序号
+                }
+            });
+            
+            // console.log(`[DEBUG] layoutSortById对象:`, layoutSortById);
+        }
+    }
+}
+
+function parseResponse(xmlString) {
+    // 使用正则表达式解析XML，避免使用DOMParser
+    let layoutSortById = {};
+    // 先尝试解析Layout数据
+    if (xmlString.includes('<Layout>')) {
+        layoutSortById = parseLayoutData(xmlString);
+    }
+
+    // 获取 Block 值
+    const blockMatch = xmlString.match(/<Block>(.*?)<\/Block>/);
+    const block = blockMatch ? blockMatch[1] : null;
+
+
+    // 获取 BlockSeat 内容
+    const blockSeatMatch = xmlString.match(/<BlockSeat>(.*?)<\/BlockSeat>/);
+    const blockSeatData = blockSeatMatch ? blockSeatMatch[1] : "";
+
+    if (blockSeatData) {
+        // 使用 ^ 分割每个座位数据
+        const seats = blockSeatData.split('^');
+
+        seats.forEach(seatData => {
+            if (seatData.trim()) {
+                // 使用 @ 分割座位信息，第一个是座位ID
+                const seatInfo = seatData.split('@');
+                if (seatInfo.length > 0) {
+                    const seatId = seatInfo[0];
+                    let chooseable = seatInfo[2];
+                    let seat = {};
+                    seat.id = seatId;
+                    seat.block = block;
+                    
+                    let seatElement = layoutSortById[seatId];
+                    // 检查是否站票超过ID最大值
+                    if (seatElement && seatElement.sortIndex > MAX_SEAT_ID && block.toString().startsWith("1")) {
+                        sendFeiShuMsg(WEBHOOK_URL, `站票超过ID最大值，不锁票 block:${block} seat:${seatId} index:${seatElement.sortIndex}`)
+                        return;
+                    }
+                    
+                    if (!isSuccess) {
+                        if (chooseable == "0") {
+                            console.log(`[YES24 info] chooseable==0 发现空座，直接接口锁定: block:${block} seat:${seatId}`);
+                            addSeatToQueue(seat);
+                            sendFeiShuMsg(WEBHOOK_URL,`刷到空座，直接接口锁定 block:${block} seat:${seatId} seatInfo:${seatInfo}`)
+                        }else{
+                            console.log(`[YES24 info] chooseable!=0 发现可能可用座位，加入列表尝试: block:${block} seat:${seatId}`);
+                            secondSeatQueue.push(seat);
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+// endregion
+
+
+//region 主流程
 // producer：搜索可用座位添加到列表
 async function searchSeat() {
     getUserInfo();
@@ -448,16 +516,30 @@ async function searchSeat() {
     await sleep(1000);
     while (!isSuccess) {
         if (seatQueue.length > 0) {
-            await sleep(300);
+            await sleep(10);
             continue;
+        }
+        if (isSuccess) {
+            break;
         }
         // 一直循环遍历blockSelect
         sendSearchSeatRequest(blockSelect[i]);
         i = (i + 1) % blockSelect.length;
         requestCount++;
+        await sleep(50);
         if (requestCount % 8 === 0) {
             requestCount = 0;
             await sleep(REFRESH_INTERVAL);
+        }
+    }
+}
+
+async function trySecondSeat(){
+    if (seatQueue.length == 0 && secondSeatQueue.length > 0 && !isSuccess) {
+        let seat = secondSeatQueue.shift();
+        if (seat) {
+            sendSeatLockRequest(seat.block,seat.id,false)
+            await sleep(2000);
         }
     }
 }
@@ -475,13 +557,17 @@ async function lockSeat() {
         if (seatQueue.length > 0) {
             let seat = getSeatFromQueue();
             if (seat) {
-                await enterPage(seat.block);
-                await getSeat(seat.block, seat.id);
+                await sendSeatLockRequest(seat.block,seat.id,true)
             }
+            popSeatFromQueue();
+            await sleep(300)
+        }else{
+            await sleep(10);
         }
-        await sleep(100);
     }
+    // 接口锁成功的处理一下选座
     sendFeiShuMsg(WEBHOOK_URL, `抢票成功`);
+    await chooseSeatAndGotoPayment(successBlock,successId);
     await sleep(1000);
     clickStepCtrlBtn03();
     await sleep(2000);
@@ -490,6 +576,12 @@ async function lockSeat() {
     // openPayment();
 }
 
+lockSeat();
+
+// endregion
+
+
+// region 测试
 function testAddSeatToQueue(block,seatId){
     let seat = {};
     seat.id = seatId;
@@ -497,4 +589,4 @@ function testAddSeatToQueue(block,seatId){
     addSeatToQueue(seat);   
 }
 
-lockSeat();
+// endregion   
