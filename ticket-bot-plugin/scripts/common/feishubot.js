@@ -1,5 +1,4 @@
-
-function sendFeiShuMsg(webhookUrl,msg) {
+async function sendFeiShuMsg(webhookUrl,msg) {
     if (!webhookUrl) {
         console.log("WEBHOOK_URL未设置");
         return;

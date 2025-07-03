@@ -5,7 +5,7 @@ let SEAT_MAX_CLICK_COUNT = 30; // 单个座位最大点击次数
 let WEBHOOK_URL = ''; // 飞书webhook url
 let USERID = ''; // 用户id 抓包自己看
 let MAX_SEAT_ID = 300; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
-let REFRESH_INTERVAL = 800; // 刷新时间间隔 根据网络调整
+let REFRESH_INTERVAL = 500; // 刷新时间间隔 根据网络调整
 
 
 /*--------------------------------- 勿修改 ---------------------------------*/
@@ -16,6 +16,7 @@ let concertcfg = {};// 存储当前页面的concertcfg
 concertcfg.idCustomer = USERID // idCustomer
 let successBlock = "";
 let successId = "";
+let sendedIdList = [];
 
 // region 队列
 let seatQueue = [];// 可选座位队列
@@ -374,14 +375,14 @@ async function sendSeatLockRequest(block,seatId,sendmsg=false) {
                 successBlock = block;
                 successId = seatId;
                 console.log(`[YES24 Success] 座位锁定成功: ${seatId}`);
-                sendFeiShuMsg(WEBHOOK_URL, `座位接口锁定成功: block:${block} seat:${seatId}`);
+                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位接口锁定成功: block:${block} seat:${seatId}`);
             } else if (code === 'block') {
                 console.error(`[YES24 Error] 被block 需要验证码`);
-                sendFeiShuMsg(WEBHOOK_URL, `被block: block:${block} seat:${seatId}`);
+                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]被block: block:${block} seat:${seatId}`);
             } else {
                 console.error(`[YES24 Error] 锁定失败: Code=${code}, Message=${message}`);
                 if (sendmsg) {
-                    sendFeiShuMsg(WEBHOOK_URL, `锁定失败: block:${block} seat:${seatId} Code=${code} Message=${message}`);
+                    sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]锁定失败: block:${block} seat:${seatId} Code=${code} Message=${message}`);
                 }
             }
         } else {
@@ -390,7 +391,7 @@ async function sendSeatLockRequest(block,seatId,sendmsg=false) {
         })
         .catch(err => {
         console.error(`[YES24 Error] Lock请求失败:`, err.message);
-        sendFeiShuMsg(WEBHOOK_URL, `Lock请求失败: block:${block} seat:${seatId} Error=${err.message}`);
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]Lock请求失败: block:${block} seat:${seatId} Error=${err.message}`);
         })
 }
 
@@ -467,7 +468,10 @@ function parseResponse(xmlString) {
                     seat.block = block;
                     
                     let seatElementIdx = layoutSortById["t"+seatId];
-                    // sendFeiShuMsg(WEBHOOK_URL, `刷到座位 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
+                    if (!sendedIdList[seatId]){
+                        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]刷到座位 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
+                        sendedIdList[seatId] = true;
+                    }
                     // 检查是否站票超过ID最大值
                     if (seatElementIdx && seatElementIdx > MAX_SEAT_ID && block.toString().startsWith("1")) {
                         // sendFeiShuMsg(WEBHOOK_URL, `站票超过ID最大值，不锁票 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
@@ -478,7 +482,7 @@ function parseResponse(xmlString) {
                         if (chooseable == "0") {
                             console.log(`[YES24 info] chooseable==0 发现空座，直接接口锁定: block:${block} seat:${seatId},index:${seatElementIdx},seatInfo:${seatInfo}`);
                             addSeatToQueue(seat);
-                            sendFeiShuMsg(WEBHOOK_URL,`刷到空座，直接接口锁定 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
+                            sendFeiShuMsg(WEBHOOK_URL,`[${new Date().toLocaleString()}]刷到空座，直接接口锁定 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
                         }else{
                             console.log(`[YES24 info] chooseable!=0 发现可能可用座位，加入列表尝试: block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`);
                             secondSeatQueue.push(seat);
@@ -546,13 +550,13 @@ async function lockSeat() {
                 sendSeatLockRequest(seat.block,seat.id,true)
             }
             popSeatFromQueue();
-            await sleep(400)
+            await sleep(300)
         }else{
             await sleep(10);
         }
     }
     // 接口锁成功的处理一下选座
-    sendFeiShuMsg(WEBHOOK_URL, `抢票成功 successBlock:${successBlock} successId:${successId}`);
+    sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]抢票成功 successBlock:${successBlock} successId:${successId}`);
     await chooseSeatAndGotoPayment(successBlock,successId);
     await sleep(1000);
     clickStepCtrlBtn03();
