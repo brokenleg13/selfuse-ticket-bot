@@ -208,11 +208,10 @@ async function lockSeat() {
     console.log("paymentFormParams", paymentFormParams);
     // await sleep(2000);
     sendValidateRequest(seats[0],paymentFormParams);
-    sendValidateRequest(seats[1],paymentFormParams);
+    // sendValidateRequest(seats[1],paymentFormParams);
     await sleep(2000);
-    sendLockRequest([seats[0],seats[1]],paymentFormParams);
-    await sleep(1000);
-    sendLockRequest([seats[0],seats[1]],paymentFormParams);
+    sendLockRequest([seats[0]],paymentFormParams);
+
     // await sleep(5000);
     // // getUserInfo();
     // searchSeat(); // 启动爬虫
@@ -256,7 +255,6 @@ async function getFixedPage(k, zone, round) {
         "Accept-Language": "zh-CN,zh;q=0.9",
         "Connection": "keep-alive",
         "Cookie": cookie,
-        "Referer": "https://booking.thaiticketmajor.com/booking/3m/zones.php?query=608",
         "sec-ch-ua": "\"Not;A=Brand\";v=\"99\", \"Google Chrome\";v=\"139\", \"Chromium\";v=\"139\"",
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": "\"Windows\"",
@@ -345,7 +343,24 @@ function getPaymentFormParams(htmlString) {
 }
 
 async function sendLockRequest(seatInfoList,paymentFormParams) {
-    const url = `https://booking.thaiticketmajor.com/booking/3m/bookingseats.php?k=${K_VALUE}`;
+    const targetUrl = `https://booking.thaiticketmajor.com/booking/3m/bookingseats.php?k=${K_VALUE}`;
+    const refererUrl = `https://booking.thaiticketmajor.com/booking/3m/fixed.php?k=${K_VALUE}&zone=${paymentFormParams.zone}&round=${RD_ID}`;
+
+    // Add the rule before sending the request
+    await new Promise(resolve => {
+        chrome.runtime.sendMessage({
+            action: 'addRefererRule',
+            data: { targetUrl: targetUrl, refererUrl: refererUrl }
+        }, response => {
+            if (response && response.success) {
+                console.log('Lock request rule added, proceeding with fetch.');
+            } else {
+                console.error('Failed to add lock request rule:', response ? response.error : 'No response');
+            }
+            resolve();
+        });
+    });
+
     const cookie = getCookie();
 
     const headers = {
@@ -353,7 +368,6 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
         'Accept-Language': 'zh-CN,zh;q=0.9',
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
         'Origin': 'https://booking.thaiticketmajor.com',
-        'Referer': `https://booking.thaiticketmajor.com/booking/3m/fixed.php?k=${K_VALUE}&zone=${paymentFormParams.zone}&round=${RD_ID}`,
         'sec-ch-ua': '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
         'sec-ch-ua-mobile': '?0',
         'sec-ch-ua-platform': '"Windows"',
@@ -394,6 +408,7 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
         'zoneDesc': paymentFormParams.zoneDesc, // e.g. 'D1'
         'travelChild1': paymentFormParams.travelChild1,
         'travelChild2': paymentFormParams.travelChild2,
+        'travelChild2':paymentFormParams.travelChild2,
         'enroll_val': paymentFormParams.enroll_val,
         'dval': paymentFormParams.dval, // 注意: 这个值可能是用户标识
         'companyid': paymentFormParams.companyid,
@@ -404,7 +419,7 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
     console.log("body", body);
 
     try {
-        const response = await fetch(url, {
+        const response = await fetch(targetUrl, {
             method: 'POST',
             headers: headers,
             body: body
@@ -421,6 +436,15 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
     } catch (error) {
         console.error('Fetch error:', error);
         return null;
+    } finally {
+        // Always remove the rule after the request is done
+        chrome.runtime.sendMessage({ action: 'removeRefererRule' }, response => {
+            if (response && response.success) {
+                console.log('Lock request rule removed successfully.');
+            } else {
+                console.error('Failed to remove lock request rule:', response ? response.error : 'No response');
+            }
+        });
     }
 }   
 

@@ -1,11 +1,19 @@
 {
     "manifest_version": 3,
     "name": "EasyConcertKorea",
-    "description": "Extension to get easily the concert on korean website",
+    "description": "A simple ticket bot for Interpark, Yes24, and Melon Ticket.",
     "version": "1.0",
     "permissions": [
-        "storage"
+        "storage",
+        "activeTab",
+        "declarativeNetRequest"
     ],
+    "host_permissions": [
+        "https://booking.thaiticketmajor.com/*"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
     "web_accessible_resources": [
         {
             "resources": [
