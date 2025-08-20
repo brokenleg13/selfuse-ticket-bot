@@ -128,4 +128,72 @@ function getPlatformImageSrc(platform) {
     }
 }
 
-loadAutoBooking();
+document.addEventListener('DOMContentLoaded', () => {
+    loadAutoBooking();
+    loadThaiConfig();
+
+    const thaiStartButton = document.getElementById('thai-start-button');
+    const thaiStopButton = document.getElementById('thai-stop-button');
+    const thaiSaveButton = document.getElementById('thai-save-button');
+
+    if (thaiStartButton) {
+        thaiStartButton.addEventListener('click', () => {
+            const config = getThaiConfigFromInputs();
+            chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+                if (tabs[0]) {
+                    chrome.tabs.sendMessage(tabs[0].id, { action: "startThaiticket", config: config });
+                }
+            });
+        });
+    }
+
+    if (thaiStopButton) {
+        thaiStopButton.addEventListener('click', () => {
+            chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+                if (tabs[0]) {
+                    chrome.tabs.sendMessage(tabs[0].id, { action: "stopThaiticket" });
+                }
+            });
+        });
+    }
+
+    if (thaiSaveButton) {
+        thaiSaveButton.addEventListener('click', saveThaiConfig);
+    }
+});
+
+function getThaiConfigFromInputs() {
+    const blockSelect = document.getElementById('blockSelect').value.split(',').map(s => s.trim()).filter(Boolean);
+    const groupNum = parseInt(document.getElementById('groupNum').value, 10);
+    const refreshInterval = parseInt(document.getElementById('refreshInterval').value, 10);
+    const maxSeatId = parseInt(document.getElementById('maxSeatId').value, 10);
+    const timeout = parseInt(document.getElementById('timeout').value, 10);
+    const webhookUrl = document.getElementById('webhookUrl').value;
+
+    return {
+        blockSelect,
+        groupNum,
+        refreshInterval,
+        maxSeatId,
+        timeout,
+        webhookUrl
+    };
+}
+
+async function saveThaiConfig() {
+    const config = getThaiConfigFromInputs();
+    await store_value("thaiConfig", config);
+    alert("Configuration saved!");
+}
+
+async function loadThaiConfig() {
+    const config = await get_stored_value("thaiConfig");
+    if (config) {
+        document.getElementById('blockSelect').value = Array.isArray(config.blockSelect) ? config.blockSelect.join(',') : '';
+        document.getElementById('groupNum').value = config.groupNum || 2;
+        document.getElementById('refreshInterval').value = config.refreshInterval || 1000;
+        document.getElementById('maxSeatId').value = config.maxSeatId || 100;
+        document.getElementById('timeout').value = config.timeout || 5000;
+        document.getElementById('webhookUrl').value = config.webhookUrl || '';
+    }
+}

@@ -38,6 +38,92 @@ body {
     transition: transform 0.2s ease-in-out;
 }
 
+.control-button {
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 15px;
+    width: 100px;
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s ease-in-out, background-color 0.2s;
+}
+
+.control-button:hover {
+    transform: scale(1.05);
+}
+
+.start-button {
+    background-color: #28a745; /* Green */
+}
+
+.start-button:hover {
+    background-color: #218838;
+}
+
+.stop-button {
+    background-color: #dc3545; /* Red */
+}
+
+.stop-button:hover {
+    background-color: #c82333;
+}
+
+.save-button {
+    background-color: #007bff; /* Blue */
+    width: auto;
+    padding-left: 20px;
+    padding-right: 20px;
+    margin-top: 10px;
+}
+
+.save-button:hover {
+    background-color: #0069d9;
+}
+
+.config-container {
+    background-color: #fff;
+    border-radius: 8px;
+    padding: 15px;
+    width: 90%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.config-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    width: 100%;
+}
+
+.config-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.config-item.wide {
+    grid-column: span 2;
+}
+
+.config-item label {
+    margin-bottom: 5px;
+    font-size: 14px;
+    color: #333;
+}
+
+.config-item input {
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+
 .button-concert:hover {
     transform: scale(1.05);
 }

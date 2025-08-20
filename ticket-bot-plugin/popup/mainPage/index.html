@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <title>EasyKoreaConcert</title>
@@ -7,9 +8,10 @@
     <link rel="stylesheet" href="style.css">
     <script type="module" src="script.js"></script>
 </head>
+
 <body>
     <h1 class="main-color">EasyKoreaConcert</h1>
-    <div class="button-row">
+    <!-- <div class="button-row">
         <a href="../melonticketForm/melonticket.html" class="button-concert">
             <img src="../../assets/melonticket_logo.png" alt="melonticket">
             <div class="booking-site">Melon Ticket</div>
@@ -22,9 +24,47 @@
             <img src="../../assets/interpark_logo.png" alt="Interpark">
             <div class="booking-site">Interpark</div>
         </a>
+    </div> -->
+    <div class="button-row">
+        <!-- <div class="button-concert">
+            <img src="../../assets/thaiticketmajor_logo.png" alt="ThaiTicketMajor">
+            <div class="booking-site">ThaiTicketMajor</div>
+        </div> -->
+        <button id="thai-start-button" class="control-button start-button">Start</button>
+        <button id="thai-stop-button" class="control-button stop-button">Stop</button>
+    </div>
+    <div id="thai-config-container" class="config-container">
+        <div class="config-grid">
+            <div class="config-item">
+                <label for="blockSelect">Sections (comma-separated):</label>
+                <input type="text" id="blockSelect" name="blockSelect" placeholder="A1,A2,B1">
+            </div>
+            <div class="config-item">
+                <label for="groupNum">Group Size:</label>
+                <input type="number" id="groupNum" name="groupNum" min="1">
+            </div>
+            <div class="config-item">
+                <label for="refreshInterval">Refresh Interval (ms):</label>
+                <input type="number" id="refreshInterval" name="refreshInterval" min="100">
+            </div>
+            <div class="config-item">
+                <label for="maxSeatId">Max Seat ID:</label>
+                <input type="number" id="maxSeatId" name="maxSeatId" min="1">
+            </div>
+            <div class="config-item">
+                <label for="timeout">Timeout (ms):</label>
+                <input type="number" id="timeout" name="timeout" min="1000">
+            </div>
+             <div class="config-item wide">
+                <label for="webhookUrl">Webhook URL:</label>
+                <input type="text" id="webhookUrl" name="webhookUrl" placeholder="https://...">
+            </div>
+        </div>
+        <button id="thai-save-button" class="control-button save-button">Save Config</button>
     </div>
     <div class="list-booking-container" id="list-booking">
 
     </div>
 </body>
+
 </html>

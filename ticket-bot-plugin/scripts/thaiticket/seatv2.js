@@ -1,11 +1,11 @@
 /*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
 let seatSelect = []; // 没用 todo:增加自定义选座
-let blockSelect = [306, 307, 308, 316, 317, 318,302,312,102,105,101,103,104,106]; // 自定义选区
-let SEAT_MAX_CLICK_COUNT = 30; // 单个座位最大点击次数
-let WEBHOOK_URL = 'https://open.feishu.cn/open-apis/bot/v2/hook/1b4f1f86-5ba8-4506-81b5-a025de08d4cd'; // 飞书webhook url
-let USERID = 'N20250630175245a0a'; // 用户id 抓包自己看
-let MAX_SEAT_ID = 200; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
-let REFRESH_INTERVAL = 700; // 刷新时间间隔 根据网络调整
+let blockSelect = ["A2"]; // 自定义选区
+let WEBHOOK_URL = ''; // 飞书webhook url
+let MAX_SEAT_ID = 100; // ID最大值，超过的票不锁
+let REFRESH_INTERVAL = 1000; // 刷新时间间隔 根据网络调整
+let GROUP_NUM = 2; // 连坐数，>1时只找连坐锁
+let TIMEOUT = 5000; // 等待锁票超时时间
 
 
 /*--------------------------------- 勿修改 ---------------------------------*/
@@ -13,65 +13,18 @@ let isSuccess = false; // 是否成功
 let successZone = "";
 let successSeat = null;
 let successId = "";
-let sendedIdList = [];
+let successNum = 0;
+let failedNum = 0;
 
 let K_VALUE = "";
 let BASE_URL = "";
 let RD_ID = "";
 
-// region 队列 
-let seatQueue = [];// 可选座位队列
-let secondSeatQueue = [];// 被锁过的座位队列 碰运气
-function addSeatToQueue(seat) {
-    seatQueue.push(seat);
-}
-
-function getSeatFromQueue() {
-    return seatQueue[0];
-}
-
-function popSeatFromQueue() {
-    return seatQueue.shift()
-}
-// endregion
+let botRunning = false;
+let mainLoopInterval;
 
 
-//region 页面操作
-function getConcertId() {
-    let url = window.location.href;
-    let concertId = url.split("=")[1];
-    return concertId;
-}
-
-async function selectDate(data) {
-    let date = data.date;
-    let time = data.time;
-    if (date) {
-        document.getElementById(date).click();
-        await sleep(500);
-        if (time) {
-            console.log("time", time);
-            console.log(document.getElementsByTagName("li"));
-            let lis = document.getElementsByTagName("li");
-            for (let i = 0; i < lis.length; i++) {
-                if (lis[i].innerText.includes(time)) {
-                    lis[i].click();
-                }
-            }
-        }
-    }
-    document.getElementById("btnSeatSelect").click();
-}
-
-function TampermonkeyClick() {
-    // 直接触发自定义事件，而不是依赖storage事件
-    const clickEvent = new CustomEvent('tampermonkey-click', {
-        detail: { timestamp: Date.now() }
-    });
-    window.dispatchEvent(clickEvent);
-}
-
-
+// region 页面操作
 function theFrame() {
     return window.frames[0].document;
 }
@@ -84,11 +37,6 @@ function theTopWindow() {
 function getCookie() {
     let frame = theTopWindow();
     return frame.cookie;
-}
-
-// 获取iframe中的idHall, idTime, idCustomer
-function getUserInfo() {
-
 }
 
 function getKValue() {
@@ -118,69 +66,28 @@ function getBaseUrl() {
     return null;
 }
 
+function getPaymentFormParams(htmlString) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(htmlString, 'text/html');
+    const form = doc.getElementById('frmPayment');
 
-// 断言锁定成功
-function assertLockSuccess() {
-    let frame = theTopWindow();
-    const el = frame.querySelector('#StepCtrlBtn03');
-    if (el && el.style.display === 'block') {
-        console.log('✅ class 正确：m03 on');
-        return true;
-    } else {
-        console.log('❌ class 不匹配');
-        return false;
+    if (!form) {
+        console.error('Payment form with id "frmPayment" not found.');
+        return null;
     }
-}
 
+    const inputs = form.querySelectorAll('input');
+    const params = {};
 
-// endregion
-
-//region 接口操作
-
-async function sendSearchSeatRequest(block) {
-
-}
-
-async function sendSeatLockRequest(block,seatId,sendmsg=false) {
-
-}
-
-function parseLayoutData(xmlString) {
-    
-}
-
-function parseResponse(htmlstring) {
-}
-// endregion
-
-
-//region 主流程
-// producer：搜索可用座位添加到列表
-async function searchSeat() {
-    getUserInfo();
-    await sleep(1000);
-    let i = 0;
-    let requestCount = 0;
-    await sleep(1000);
-    while (!isSuccess) {
-        if (seatQueue.length > 0) {
-            await sleep(10);
-            continue;
+    inputs.forEach(input => {
+        if (input.name) {
+            params[input.name] = input.value;
         }
-        if (isSuccess) {
-            break;
-        }
-        // 一直循环遍历blockSelect
-        sendSearchSeatRequest(blockSelect[i]);
-        i = (i + 1) % blockSelect.length;
-        requestCount++;
-        await sleep(50);
-        if (requestCount % 8 === 0) {
-            requestCount = 0;
-            await sleep(REFRESH_INTERVAL);
-        }
-    }
+    });
+
+    return params;
 }
+
 
 function initEnv() {
     let k = getKValue();
@@ -191,61 +98,79 @@ function initEnv() {
     RD_ID = rdId;
 }
 
+function parseSeatsFromHTML(htmlString) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(htmlString, 'text/html');
 
-// consumer：从列表中获取座位并尝试锁定
-async function lockSeat() {
-    console.log("bot is running");
-    await sleep(3000);
-    initEnv();
-    console.log("baseUrl", BASE_URL);
-    console.log("k", K_VALUE);
-    console.log("rdId", RD_ID);
-    await sleep(2000);
-    let data = await getFixedPage(K_VALUE, "D1", RD_ID,BASE_URL);
-    let seats = parseSeatsFromHTML(data);
-    let paymentFormParams = getPaymentFormParams(data);
-    console.log("seats", seats);
-    console.log("paymentFormParams", paymentFormParams);
-    // await sleep(2000);
-    sendValidateRequest(seats[0],paymentFormParams);
-    // sendValidateRequest(seats[1],paymentFormParams);
-    await sleep(2000);
-    sendLockRequest([seats[0]],paymentFormParams);
+    const availableSeats = [];
+    const seatCells = doc.querySelectorAll('td[data-info]');
 
-    // await sleep(5000);
-    // // getUserInfo();
-    // searchSeat(); // 启动爬虫
-    // selectRange(1);
-    // while (!isSuccess) {
-    //     if (seatQueue.length > 0) {
-    //         let seat = getSeatFromQueue();
-    //         if (seat) {
-    //             sendSeatLockRequest(seat.block,seat.id,true)
-    //         }
-    //         popSeatFromQueue();
-    //         await sleep(300)
-    //     }else{
-    //         await sleep(10);
-    //     }
-    //     // sendSeatLockRequest(102,3700229)
-    //     // await sleep(500)
-    // }
-    // // 接口锁成功的处理一下选座
-    // sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]抢票成功 successBlock:${successBlock} successId:${successId}`);
-    // await chooseSeatAndGotoPayment(successBlock,successId);
-    // await sleep(1000);
-    // clickStepCtrlBtn03();
-    // await sleep(2000);
-    // clickStepCtrlBtn04();
-    // await sleep(1000);
-    // openPayment();
+    //超过max_seat_id的seat不加入列表
+    let idx = 0;
+    seatCells.forEach(cell => {
+        if (idx > MAX_SEAT_ID) {
+            return;
+        }
+        const seatDiv = cell.querySelector('div.seatuncheck');
+        if (seatDiv) {
+            const dataInfo = cell.getAttribute('data-info');
+            try {
+                const seatInfo = JSON.parse(dataInfo);
+                const title = cell.getAttribute('title');
+                if (title) {
+                    const [row, seatNum] = title.split('-');
+                    availableSeats.push({
+                        seat: seatInfo.seat,
+                        seatk: seatInfo.seatk,
+                        title: title,
+                        row: row,
+                        seatNum: seatNum
+                    });
+                }
+            } catch (e) {
+                console.error("Failed to parse data-info JSON:", dataInfo, e);
+            }
+        }
+        idx++;
+    });
+
+    return availableSeats;
 }
 
-lockSeat();
+function getGroupSeats(seats) {
+    console.log("seats", seats);
+    //筛选连坐 row一样 num连坐
+    if (GROUP_NUM > 1) {
+        for (let i = 0; i <= seats.length - GROUP_NUM; i++) {
+            const potentialGroup = seats.slice(i, i + GROUP_NUM);
+            
+            const firstRow = potentialGroup[0].row;
+            if (potentialGroup.every(seat => seat.row === firstRow)) {
+                let isConsecutive = true;
+                for (let j = 1; j < GROUP_NUM; j++) {
+                    if (parseInt(potentialGroup[j].seatNum) !== parseInt(potentialGroup[0].seatNum) + j) {
+                        isConsecutive = false;
+                        break;
+                    }
+                }
+                
+                if (isConsecutive) {
+                    console.log(`找到一组 ${GROUP_NUM} 连坐:`, potentialGroup);
+                    return potentialGroup; // 找到立即返回
+                }
+            }
+        }
+        
+        console.log(`未找到 ${GROUP_NUM} 个连续的座位。`);
+        return []; // 未找到，返回空数组
+    }
+    // 如果 GROUP_NUM <= 1，直接返回单个座位的数组
+    return seats.length > 0 ? [seats[0]] : [];
+}
 
+//endregion
 
-// endregion   
-
+//region 接口操作
 async function getFixedPage(k, zone, round) {
     const url = `https://booking.thaiticketmajor.com/booking/3m/fixed.php?k=${k}&zone=${zone}&round=${round}`;
     let cookie = getCookie();
@@ -287,60 +212,83 @@ async function getFixedPage(k, zone, round) {
     }
 }
 
-function parseSeatsFromHTML(htmlString) {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(htmlString, 'text/html');
+async function sendValidateRequest(seatInfo,paymentFormParams) {
+    const url = `https://booking.thaiticketmajor.com/booking/3m/validateseat.php?k=${K_VALUE}&zw=${paymentFormParams.zone}`;
+    const cookie = getCookie();
 
-    const availableSeats = [];
-    const seatCells = doc.querySelectorAll('td[data-info]');
+    const headers = {
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Origin': 'https://booking.thaiticketmajor.com',
+        'Referer': `https://booking.thaiticketmajor.com/booking/3m/fixed.php?k=${K_VALUE}&zone=${paymentFormParams.zone}&round=${RD_ID}`,
+        'sec-ch-ua': '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Cookie': cookie
+    };
 
-    seatCells.forEach(cell => {
-        const seatDiv = cell.querySelector('div.seatuncheck');
-        if (seatDiv) {
-            const dataInfo = cell.getAttribute('data-info');
-            try {
-                const seatInfo = JSON.parse(dataInfo);
-                const title = cell.getAttribute('title');
-                if (title) {
-                    const [row, seatNum] = title.split('-');
-                    availableSeats.push({
-                        seat: seatInfo.seat,
-                        seatk: seatInfo.seatk,
-                        title: title,
-                        row: row,
-                        seatNum: seatNum
-                    });
-                }
-            } catch (e) {
-                console.error("Failed to parse data-info JSON:", dataInfo, e);
-            }
-        }
+    // The body contains a field 'chkSeats[]' which needs special handling.
+    const otherBodyParams = new URLSearchParams({
+        'ehId': paymentFormParams.ehId,
+        'curentdate': paymentFormParams.curentdate,
+        'max_payment': paymentFormParams.max_payment,
+        'payment_cnt': paymentFormParams.payment_cnt,
+        'paytype': paymentFormParams.paytype,
+        'performance': paymentFormParams.performance,
+        'pricelist': paymentFormParams.pricelist,
+        'rdId': paymentFormParams.rdId,
+        'seatlist': paymentFormParams.seatlist,
+        'showdate': paymentFormParams.showdate,
+        'showtime': paymentFormParams.showtime,
+        'venue': paymentFormParams.venue,
+        'zone': paymentFormParams.zone,
+        'zoneDesc': paymentFormParams.zoneDesc,
+        'travelChild1': paymentFormParams.travelChild1,
+        'travelChild2': paymentFormParams.travelChild2,
+        'enroll_val': paymentFormParams.enroll_val,
+        'dval': paymentFormParams.dval,
+        'companyid': paymentFormParams.companyid,
+        'ks': paymentFormParams.ks,
+        'inclvat': paymentFormParams.inclvat,
+        'row': seatInfo.row,
+        'seat': seatInfo.seatNum,
+        'book_type': 'fix'
     });
 
-    return availableSeats;
-}
+    const body = `chkSeats[]=${encodeURIComponent(seatInfo.seat)}&${otherBodyParams.toString()}`;
 
-function getPaymentFormParams(htmlString) {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(htmlString, 'text/html');
-    const form = doc.getElementById('frmPayment');
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: headers,
+            body: body
+        });
 
-    if (!form) {
-        console.error('Payment form with id "frmPayment" not found.');
+        if (!response.ok) {
+            console.error(`HTTP error! status: ${response.status}`);
+            return null;
+        }
+
+        const data = await response.json();
+        console.log("Validate seat response:", data);
+        if (data.result) {
+            successNum++;
+        }else{
+            failedNum++;
+        }
+        return data;
+    } catch (error) {
+        console.error('Fetch error:', error);
         return null;
     }
+} 
 
-    const inputs = form.querySelectorAll('input');
-    const params = {};
-
-    inputs.forEach(input => {
-        if (input.name) {
-            params[input.name] = input.value;
-        }
-    });
-
-    return params;
-}
 
 async function sendLockRequest(seatInfoList,paymentFormParams) {
     const targetUrl = `https://booking.thaiticketmajor.com/booking/3m/bookingseats.php?k=${K_VALUE}`;
@@ -432,6 +380,13 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
 
         const data = await response.json();
         console.log("Booking response:", data);
+        if (data.result) {
+            isSuccess = true;
+            console.log("锁票成功");
+            if (WEBHOOK_URL) {
+                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]抢票成功 successBlock:${paymentFormParams.zone} successSeat:${seatlist}`);
+            }
+        }
         return data;
     } catch (error) {
         console.error('Fetch error:', error);
@@ -447,81 +402,109 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
         });
     }
 }   
+// endregion
 
-async function sendValidateRequest(seatInfo,paymentFormParams) {
-    const url = `https://booking.thaiticketmajor.com/booking/3m/validateseat.php?k=${K_VALUE}&zw=${paymentFormParams.zone}`;
-    const cookie = getCookie();
+// main
+// consumer：从列表中获取座位并尝试锁定
+async function tryLockSeat(seatsToLock, paymentFormParams) {
+    // Reset counters for this attempt
+    successNum = 0;
+    failedNum = 0;
 
-    const headers = {
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Origin': 'https://booking.thaiticketmajor.com',
-        'Referer': `https://booking.thaiticketmajor.com/booking/3m/fixed.php?k=${K_VALUE}&zone=${paymentFormParams.zone}&round=${RD_ID}`,
-        'sec-ch-ua': '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Cookie': cookie
-    };
-
-    // The body contains a field 'chkSeats[]' which needs special handling.
-    const otherBodyParams = new URLSearchParams({
-        'ehId': paymentFormParams.ehId,
-        'curentdate': paymentFormParams.curentdate,
-        'max_payment': paymentFormParams.max_payment,
-        'payment_cnt': paymentFormParams.payment_cnt,
-        'paytype': paymentFormParams.paytype,
-        'performance': paymentFormParams.performance,
-        'pricelist': paymentFormParams.pricelist,
-        'rdId': paymentFormParams.rdId,
-        'seatlist': paymentFormParams.seatlist,
-        'showdate': paymentFormParams.showdate,
-        'showtime': paymentFormParams.showtime,
-        'venue': paymentFormParams.venue,
-        'zone': paymentFormParams.zone,
-        'zoneDesc': paymentFormParams.zoneDesc,
-        'travelChild1': paymentFormParams.travelChild1,
-        'travelChild2': paymentFormParams.travelChild2,
-        'enroll_val': paymentFormParams.enroll_val,
-        'dval': paymentFormParams.dval,
-        'companyid': paymentFormParams.companyid,
-        'ks': paymentFormParams.ks,
-        'inclvat': paymentFormParams.inclvat,
-        'row': seatInfo.row,
-        'seat': seatInfo.seatNum,
-        'book_type': 'fix'
-    });
-
-    const body = `chkSeats[]=${encodeURIComponent(seatInfo.seat)}&${otherBodyParams.toString()}`;
-
-    console.log("body", body);
-
-    try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: headers,
-            body: body
-        });
-
-        if (!response.ok) {
-            console.error(`HTTP error! status: ${response.status}`);
-            return null;
-        }
-
-        const data = await response.json();
-        console.log("Validate seat response:", data);
-        successSeat = seatInfo;
-        successId = seatInfo.seatNum;
-        successZone = paymentFormParams.zone;
-        isSuccess = true;
-        return data;
-    } catch (error) {
-        console.error('Fetch error:', error);
-        return null;
+    let startTime = Date.now();
+    for (let seat of seatsToLock) {
+        sendValidateRequest(seat, paymentFormParams);
     }
-} 
+    while (successNum + failedNum < seatsToLock.length) {
+        await sleep(100);
+        if (Date.now() - startTime > TIMEOUT) {
+            console.error("Timeout: " + TIMEOUT + "ms");
+            break;
+        }
+    }
+    if (successNum == seatsToLock.length) {
+        await sendLockRequest(seatsToLock, paymentFormParams);
+    }
+}
+
+
+async function mainLoop() {
+    if (!botRunning) return;
+    console.log("Bot loop running...");
+
+    initEnv();
+    
+    while(botRunning) { // 添加 while 循环
+        if (!botRunning) break; 
+        
+        for (let zone of blockSelect) {
+            if (!botRunning) break; 
+            console.log(`Checking zone: ${zone}`);
+            let data = await getFixedPage(K_VALUE, zone, RD_ID, BASE_URL);
+            if (data) {
+                let availableSeats = parseSeatsFromHTML(data);
+                let paymentFormParams = getPaymentFormParams(data);
+                
+                let seatsToLock = getGroupSeats(availableSeats);
+                if (seatsToLock.length > 0) {
+                    console.log("Found seats to lock:", seatsToLock);
+                    await tryLockSeat(seatsToLock, paymentFormParams);
+                    if (isSuccess) {
+                        stopBot();
+                        return; // 使用 return 直接退出 mainLoop 函数
+                    }
+                } else {
+                    console.log(`No available seats in zone ${zone}.`);
+                }
+            }
+            await sleep(REFRESH_INTERVAL);
+        }
+    }
+}
+
+function startBot(config) {
+    if (config) {
+        blockSelect = config.blockSelect || ["A2"];
+        GROUP_NUM = config.groupNum || 2;
+        REFRESH_INTERVAL = config.refreshInterval || 1000;
+        MAX_SEAT_ID = config.maxSeatId || 100;
+        TIMEOUT = config.timeout || 5000;
+        WEBHOOK_URL = config.webhookUrl || '';
+        console.log("Configuration updated:", {
+            blockSelect,
+            GROUP_NUM,
+            REFRESH_INTERVAL,
+            MAX_SEAT_ID,
+            TIMEOUT,
+            WEBHOOK_URL
+        });
+    }
+
+    if (!botRunning) {
+        botRunning = true;
+        console.log("ThaiTicket Bot started!");
+        // sendFeiShuMsg(WEBHOOK_URL, "ThaiTicket Bot started!");
+        mainLoop(); 
+    }
+}
+
+function stopBot() {
+    if (botRunning) {
+        botRunning = false;
+        isSuccess = false;
+        console.log("ThaiTicket Bot stopped!");
+        // sendFeiShuMsg(WEBHOOK_URL, "ThaiTicket Bot stopped!");
+    }
+}
+
+chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+    if (request.action === "startThaiticket") {
+        startBot(request.config);
+        sendResponse({status: "started"});
+    } else if (request.action === "stopThaiticket") {
+        stopBot();
+        sendResponse({status: "stopped"});
+    }
+});
+
+
