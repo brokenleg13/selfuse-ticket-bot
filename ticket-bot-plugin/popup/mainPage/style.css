@@ -123,6 +123,22 @@ body {
     font-size: 14px;
 }
 
+.strategy-container {
+    display: flex;
+    justify-content: space-around;
+    width: 100%;
+    margin-top: 10px;
+}
+
+.strategy-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.strategy-item label {
+    font-size: 12px;
+}
 
 .button-concert:hover {
     transform: scale(1.05);

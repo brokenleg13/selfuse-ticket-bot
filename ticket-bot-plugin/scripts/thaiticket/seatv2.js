@@ -7,6 +7,10 @@ let REFRESH_INTERVAL = 1000; // 刷新时间间隔 根据网络调整
 let GROUP_NUM = 2; // 连坐数，>1时只找连坐锁
 let TIMEOUT = 5000; // 等待锁票超时时间
 
+let STRATEGY1_ENABLED = true;
+let STRATEGY2_ENABLED = true;
+let STRATEGY3_ENABLED = true;
+
 
 let leftBlock = ["A1","B1","C1"];
 let rightBlock = ["A2","B3","C2"];
@@ -189,24 +193,30 @@ function getGroupSeats(seats, zone, rowCounts, rowPhysicalIndex) {
     const otherRows = sortedRows.filter(row => rowPhysicalIndex[row] > 5)
 
     // --- Priority 1: Center seats in the first 5 rows ---
-    let result = findCenterGroupInRows(priorityRows, seatsByRow, rowCounts, zone);
-    if (result) {
-        console.log("策略1命中: 在前5排中间区域找到座位。", result);
-        return result;
+    if (STRATEGY1_ENABLED) {
+        let result = findCenterGroupInRows(priorityRows, seatsByRow, rowCounts, zone);
+        if (result) {
+            console.log("策略1命中: 在前5排中间区域找到座位。", result);
+            return result;
+        }
     }
 
     // --- Priority 2: Any other seats in the first 5 rows (carpet search) ---
-    result = findFirstGroupInRows(priorityRows, seatsByRow, zone);
-    if (result) {
-        console.log("策略2命中: 在前5排找到座位。", result);
-        return result;
+    if (STRATEGY2_ENABLED) {
+        let result = findFirstGroupInRows(priorityRows, seatsByRow, zone);
+        if (result) {
+            console.log("策略2命中: 在前5排找到座位。", result);
+            return result;
+        }
     }
 
     // --- Priority 3: Any seats in the remaining rows ---
-    result = findFirstGroupInRows(otherRows, seatsByRow, zone);
-    if (result) {
-        console.log("策略3命中: 在其他排找到座位。", result);
-        return result;
+    if (STRATEGY3_ENABLED) {
+        let result = findFirstGroupInRows(otherRows, seatsByRow, zone);
+        if (result) {
+            console.log("策略3命中: 在其他排找到座位。", result);
+            return result;
+        }
     }
 
     console.log(`未找到 ${GROUP_NUM} 个连续的座位。`);
@@ -256,7 +266,6 @@ function findCenterGroupInRows(rows, seatsByRow, rowCounts, zone) {
     }
     return null;
 }
-
 
 function findFirstGroupInRows(rowsToSearch, seatsByRow, zone) {
     for (const row of rowsToSearch) {
@@ -599,13 +608,20 @@ function startBot(config) {
         MAX_SEAT_ID = config.maxSeatId || 100;
         TIMEOUT = config.timeout || 5000;
         WEBHOOK_URL = config.webhookUrl || '';
+        STRATEGY1_ENABLED = config.strategy1 !== false;
+        STRATEGY2_ENABLED = config.strategy2 !== false;
+        STRATEGY3_ENABLED = config.strategy3 !== false;
+
         console.log("Configuration updated:", {
             blockSelect,
             GROUP_NUM,
             REFRESH_INTERVAL,
             MAX_SEAT_ID,
             TIMEOUT,
-            WEBHOOK_URL
+            WEBHOOK_URL,
+            STRATEGY1_ENABLED,
+            STRATEGY2_ENABLED,
+            STRATEGY3_ENABLED
         });
     }
 

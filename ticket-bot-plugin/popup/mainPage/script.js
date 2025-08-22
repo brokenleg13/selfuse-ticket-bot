@@ -169,6 +169,9 @@ function getThaiConfigFromInputs() {
     const maxSeatId = parseInt(document.getElementById('maxSeatId').value, 10);
     const timeout = parseInt(document.getElementById('timeout').value, 10);
     const webhookUrl = document.getElementById('webhookUrl').value;
+    const strategy1 = document.getElementById('strategy1').checked;
+    const strategy2 = document.getElementById('strategy2').checked;
+    const strategy3 = document.getElementById('strategy3').checked;
 
     return {
         blockSelect,
@@ -176,7 +179,10 @@ function getThaiConfigFromInputs() {
         refreshInterval,
         maxSeatId,
         timeout,
-        webhookUrl
+        webhookUrl,
+        strategy1,
+        strategy2,
+        strategy3
     };
 }
 
@@ -195,5 +201,8 @@ async function loadThaiConfig() {
         document.getElementById('maxSeatId').value = config.maxSeatId || 100;
         document.getElementById('timeout').value = config.timeout || 5000;
         document.getElementById('webhookUrl').value = config.webhookUrl || '';
+        document.getElementById('strategy1').checked = config.strategy1 !== false; // Default to true
+        document.getElementById('strategy2').checked = config.strategy2 !== false; // Default to true
+        document.getElementById('strategy3').checked = config.strategy3 !== false; // Default to true
     }
 }
