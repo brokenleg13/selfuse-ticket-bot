@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>ThaiTicketMajor Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+    <script type="module" src="script.js"></script>
+</head>
+
+<body>
+    <a href="../mainPage/index.html" class="back-button">&larr; Back</a>
+    <h1 class="main-color">ThaiTicketMajor</h1>
+    
+    <div class="button-row">
+        <button id="thai-start-button" class="control-button start-button">Start</button>
+        <button id="thai-stop-button" class="control-button stop-button">Stop</button>
+    </div>
+
+    <div id="thai-config-container" class="config-container">
+        <div class="config-grid">
+            <div class="config-item wide">
+                <label for="blockSelect">Sections (逗号分隔):</label>
+                <input type="text" id="blockSelect" name="blockSelect" placeholder="A1,A2" value="A1,A2">
+            </div>
+            <div class="config-item">
+                <label for="leftBlock">Left Blocks (逗号分隔):</label>
+                <input type="text" id="leftBlock" name="leftBlock" placeholder="A1,B1,C1" value="A1,B1,C1">
+            </div>
+            <div class="config-item">
+                <label for="rightBlock">Right Blocks (逗号分隔):</label>
+                <input type="text" id="rightBlock" name="rightBlock" placeholder="A2,B3,C2" value="A2,B3,C2">
+            </div>
+            <div class="config-item">
+                <label for="sidewaysZones">舞台侧面区域 (逗号分隔)</label>
+                <input type="text" id="sidewaysZones" name="sidewaysZones" placeholder="">
+            </div>
+            <div class="config-item">
+                <label for="groupNum">Group Size:</label>
+                <input type="number" id="groupNum" name="groupNum" min="1" placeholder="2" value="2">
+            </div>
+            <div class="config-item">
+                <label for="refreshInterval">Refresh Interval (ms):</label>
+                <input type="number" id="refreshInterval" name="refreshInterval" min="1000" placeholder="1500" value="1500">
+            </div>
+            <div class="config-item">
+                <label for="timeout">Timeout (ms):</label>
+                <input type="number" id="timeout" name="timeout" min="1500" placeholder="1500" value="1500">
+            </div>
+            <div class="config-item">
+                <label for="rowPctMin">中心排数下限 (%)</label>
+                <input type="number" id="rowPctMin" name="rowPctMin" min="0" max="100" placeholder="0" value="0">
+            </div>
+            <div class="config-item">
+                <label for="rowPctMax">中心排数上限 (%)</label>
+                <input type="number" id="rowPctMax" name="rowPctMax" min="0" max="100" placeholder="30" value="40">
+            </div>
+            <div class="config-item">
+                <label for="colPctMin">中心列数下限 (%)</label>
+                <input type="number" id="colPctMin" name="colPctMin" min="0" max="100" placeholder="0" value="0">
+            </div>
+            <div class="config-item">
+                <label for="colPctMax">中心列数上限 (%)</label>
+                <input type="number" id="colPctMax" name="colPctMax" min="0" max="100" placeholder="75" value="60">
+            </div>
+             <div class="config-item wide">
+                <label for="webhookUrl">FeiShu Webhook URL:</label>
+                <input type="text" id="webhookUrl" name="webhookUrl" placeholder="https://..." value="">
+            </div>
+        </div>
+        <div class="strategy-container">
+            <div class="strategy-item">
+                <input type="checkbox" id="strategy1" name="strategy1" checked>
+                <label for="strategy1">策略1: 中心排列优先</label>
+            </div>
+            <div class="strategy-item">
+                <input type="checkbox" id="strategy2" name="strategy2" checked>
+                <label for="strategy2">策略2: 中心排优先</label>
+            </div>
+            <div class="strategy-item">
+                <input type="checkbox" id="strategy3" name="strategy3" checked>
+                <label for="strategy3">策略3: 全部座位</label>
+            </div>
+        </div>
+        <button id="thai-save-button" class="control-button save-button">Save Config</button>
+    </div>
+</body>
+
+</html> 

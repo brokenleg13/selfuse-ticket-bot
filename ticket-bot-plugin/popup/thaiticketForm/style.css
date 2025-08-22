@@ -1,0 +1,123 @@
+/* Basic styles */
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f4f4f4;
+    margin: 0;
+    padding: 15px;
+    width: 480px;
+    box-sizing: border-box;
+}
+
+h1.main-color {
+    color: #d81b60;
+    text-align: center;
+    font-size: 24px;
+}
+
+.back-button {
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    text-decoration: none;
+    color: #333;
+    font-size: 18px;
+}
+
+
+/* Button styles */
+.button-row {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.control-button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    color: white;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.start-button {
+    background-color: #4CAF50; /* Green */
+}
+
+.start-button:hover {
+    background-color: #45a049;
+}
+
+.stop-button {
+    background-color: #f44336; /* Red */
+}
+
+.stop-button:hover {
+    background-color: #da190b;
+}
+
+.save-button {
+    background-color: #008CBA; /* Blue */
+    width: 100%;
+    margin-top: 15px;
+}
+
+.save-button:hover {
+    background-color: #007ba7;
+}
+
+
+/* Config form styles */
+.config-container {
+    background-color: #fff;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.config-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+}
+
+.config-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.config-item.wide {
+    grid-column: 1 / -1;
+}
+
+.config-item label {
+    margin-bottom: 5px;
+    font-size: 14px;
+    color: #333;
+}
+
+.config-item input {
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.strategy-container {
+    display: flex;
+    justify-content: space-around;
+    width: 100%;
+    margin-top: 10px;
+}
+
+.strategy-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.strategy-item label {
+    font-size: 12px;
+} 
