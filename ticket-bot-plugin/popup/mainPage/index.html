@@ -35,9 +35,17 @@
     </div>
     <div id="thai-config-container" class="config-container">
         <div class="config-grid">
-            <div class="config-item">
+            <div class="config-item wide">
                 <label for="blockSelect">Sections (comma-separated):</label>
                 <input type="text" id="blockSelect" name="blockSelect" placeholder="A1,A2,B1">
+            </div>
+            <div class="config-item">
+                <label for="leftBlock">Left Blocks (comma-separated):</label>
+                <input type="text" id="leftBlock" name="leftBlock" placeholder="A1,B1,C1">
+            </div>
+            <div class="config-item">
+                <label for="rightBlock">Right Blocks (comma-separated):</label>
+                <input type="text" id="rightBlock" name="rightBlock" placeholder="A2,B3,C2">
             </div>
             <div class="config-item">
                 <label for="groupNum">Group Size:</label>
@@ -53,7 +61,7 @@
             </div>
             <div class="config-item">
                 <label for="timeout">Timeout (ms):</label>
-                <input type="number" id="timeout" name="timeout" min="1000">
+                <input type="number" id="timeout" name="timeout" min="1500">
             </div>
              <div class="config-item wide">
                 <label for="webhookUrl">Webhook URL:</label>

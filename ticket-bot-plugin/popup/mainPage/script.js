@@ -164,6 +164,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function getThaiConfigFromInputs() {
     const blockSelect = document.getElementById('blockSelect').value.split(',').map(s => s.trim()).filter(Boolean);
+    const leftBlock = document.getElementById('leftBlock').value.split(',').map(s => s.trim()).filter(Boolean);
+    const rightBlock = document.getElementById('rightBlock').value.split(',').map(s => s.trim()).filter(Boolean);
     const groupNum = parseInt(document.getElementById('groupNum').value, 10);
     const refreshInterval = parseInt(document.getElementById('refreshInterval').value, 10);
     const maxSeatId = parseInt(document.getElementById('maxSeatId').value, 10);
@@ -175,6 +177,8 @@ function getThaiConfigFromInputs() {
 
     return {
         blockSelect,
+        leftBlock,
+        rightBlock,
         groupNum,
         refreshInterval,
         maxSeatId,
@@ -193,11 +197,13 @@ async function saveThaiConfig() {
 }
 
 async function loadThaiConfig() {
-    const config = await get_stored_value("thaiConfig");
+    const config = await get_stored_value('thaiConfig');
     if (config) {
-        document.getElementById('blockSelect').value = Array.isArray(config.blockSelect) ? config.blockSelect.join(',') : '';
+        document.getElementById('blockSelect').value = Array.isArray(config.blockSelect) ? config.blockSelect.join(',') : (config.blockSelect || '');
+        document.getElementById('leftBlock').value = Array.isArray(config.leftBlock) ? config.leftBlock.join(',') : (config.leftBlock || 'A1,B1,C1');
+        document.getElementById('rightBlock').value = Array.isArray(config.rightBlock) ? config.rightBlock.join(',') : (config.rightBlock || 'A2,B3,C2');
         document.getElementById('groupNum').value = config.groupNum || 2;
-        document.getElementById('refreshInterval').value = config.refreshInterval || 1000;
+        document.getElementById('refreshInterval').value = config.refreshInterval || 500;
         document.getElementById('maxSeatId').value = config.maxSeatId || 100;
         document.getElementById('timeout').value = config.timeout || 5000;
         document.getElementById('webhookUrl').value = config.webhookUrl || '';

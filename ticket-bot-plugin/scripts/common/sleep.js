@@ -5,7 +5,7 @@ async function sleep(t) {
         setTimeout(() => {
             const actualTime = Date.now() - startTime;
             if (Math.abs(actualTime - t) > 10) {
-                console.log(`[DEBUG] 延时偏差: 预期${t}ms，实际${actualTime}ms`);
+                // console.log(`[DEBUG] 延时偏差: 预期${t}ms，实际${actualTime}ms`);
             }
             resolve();
         }, t);

@@ -11,6 +11,9 @@ let STRATEGY1_ENABLED = true;
 let STRATEGY2_ENABLED = true;
 let STRATEGY3_ENABLED = true;
 
+let seatGroupFailureCount = new Map();
+let seatGroupBlacklist = new Set();
+
 
 let leftBlock = ["A1","B1","C1"];
 let rightBlock = ["A2","B3","C2"];
@@ -196,7 +199,7 @@ function getGroupSeats(seats, zone, rowCounts, rowPhysicalIndex) {
     if (STRATEGY1_ENABLED) {
         let result = findCenterGroupInRows(priorityRows, seatsByRow, rowCounts, zone);
         if (result) {
-            console.log("策略1命中: 在前5排中间区域找到座位。", result);
+            console.log("[Thaiticket] 策略1命中: 在前5排中间区域找到座位。", result);
             return result;
         }
     }
@@ -205,7 +208,7 @@ function getGroupSeats(seats, zone, rowCounts, rowPhysicalIndex) {
     if (STRATEGY2_ENABLED) {
         let result = findFirstGroupInRows(priorityRows, seatsByRow, zone);
         if (result) {
-            console.log("策略2命中: 在前5排找到座位。", result);
+            console.log("[Thaiticket] 策略2命中: 在前5排找到座位。", result);
             return result;
         }
     }
@@ -214,52 +217,68 @@ function getGroupSeats(seats, zone, rowCounts, rowPhysicalIndex) {
     if (STRATEGY3_ENABLED) {
         let result = findFirstGroupInRows(otherRows, seatsByRow, zone);
         if (result) {
-            console.log("策略3命中: 在其他排找到座位。", result);
+            console.log("[Thaiticket] 策略3命中: 在其他排找到座位。", result);
             return result;
         }
     }
 
-    console.log(`未找到 ${GROUP_NUM} 个连续的座位。`);
+    console.log(`[Thaiticket] 未找到 ${GROUP_NUM} 个连续的座位。`);
     return [];
 }
 
 function findCenterGroupInRows(rows, seatsByRow, rowCounts, zone) {
+    const isLeft = leftBlock.includes(zone);
+
     for (const row of rows) {
-        const rowSeats = seatsByRow[row]; // Sorted by indexInRow
-        if (!rowSeats || rowSeats.length < GROUP_NUM) continue;
+        const seatsInRow = seatsByRow[row];
+        if (!seatsInRow || seatsInRow.length < GROUP_NUM) continue;
 
-        const totalSeatsInRow = rowCounts[row] || 20; // Fallback
+        const totalSeats = rowCounts[row];
+        const centerIndex = Math.floor(totalSeats / 2);
 
-        let centerStart, centerEnd;
-        const isLeftZone = leftBlock.includes(zone);
+        // Define the search range: middle third of the row
+        const searchRangeStart = Math.floor(totalSeats / 3);
+        const searchRangeEnd = Math.ceil(totalSeats * 2 / 3);
 
-        if (isLeftZone) {
-            // For left zones, the "center" is the right half of the section
-            centerStart = Math.floor(totalSeatsInRow / 2);
-            centerEnd = totalSeatsInRow;
+        let seatsToSearch = seatsInRow.filter(s => s.indexInRow >= searchRangeStart && s.indexInRow <= searchRangeEnd);
+
+        if (isLeft) {
+            // For left zones, center is the right half of the row (closer to the center aisle)
+            seatsToSearch = seatsInRow.filter(s => s.indexInRow >= centerIndex);
         } else {
-            // For right/center zones, the "center" is the left half of the section
-            centerStart = 0;
-            centerEnd = Math.ceil(totalSeatsInRow / 2);
+            // For right/center zones, center is the left half of the row
+            seatsToSearch = seatsInRow.filter(s => s.indexInRow <= centerIndex);
         }
 
-        const seatsToSearch = rowSeats.filter(seat => seat.indexInRow >= centerStart && seat.indexInRow <= centerEnd);
         if (seatsToSearch.length < GROUP_NUM) continue;
 
-        if (isLeftZone) {
-            // Iterate backwards for left blocks (priority to higher indexInRow)
+        if (isLeft) {
+            // For left, search from right to left (higher index to lower) within the filtered group
             for (let i = seatsToSearch.length - GROUP_NUM; i >= 0; i--) {
                 const potentialGroup = seatsToSearch.slice(i, i + GROUP_NUM);
-                if (checkConsecutive(potentialGroup)) {
-                    return potentialGroup;
+                const firstSeat = potentialGroup[0];
+                const fullGroup = checkConsecutive(firstSeat, seatsInRow, GROUP_NUM);
+                if (fullGroup.length === GROUP_NUM) {
+                    const groupKey = fullGroup.map(s => s.seatk).sort().join(',');
+                    if (seatGroupBlacklist.has(groupKey)) {
+                        console.log(`[Thaiticket] 策略1找到黑名单中的座位组 ${groupKey}，跳过。`);
+                        continue;
+                    }
+                    return fullGroup;
                 }
             }
-        } else { // Right or center zone
-            // Iterate forwards for right/center blocks (priority to lower indexInRow)
+        } else { // 'asc' for right/center
             for (let i = 0; i <= seatsToSearch.length - GROUP_NUM; i++) {
                 const potentialGroup = seatsToSearch.slice(i, i + GROUP_NUM);
-                if (checkConsecutive(potentialGroup)) {
-                    return potentialGroup;
+                const firstSeat = potentialGroup[0];
+                const fullGroup = checkConsecutive(firstSeat, seatsInRow, GROUP_NUM);
+                if (fullGroup.length === GROUP_NUM) {
+                    const groupKey = fullGroup.map(s => s.seatk).sort().join(',');
+                    if (seatGroupBlacklist.has(groupKey)) {
+                        console.log(`[Thaiticket] 策略1找到黑名单中的座位组 ${groupKey}，跳过。`);
+                        continue;
+                    }
+                    return fullGroup;
                 }
             }
         }
@@ -267,41 +286,54 @@ function findCenterGroupInRows(rows, seatsByRow, rowCounts, zone) {
     return null;
 }
 
-function findFirstGroupInRows(rowsToSearch, seatsByRow, zone) {
-    for (const row of rowsToSearch) {
-        const rowSeats = seatsByRow[row];
-        if (!rowSeats || rowSeats.length < GROUP_NUM) continue;
+function findFirstGroupInRows(rows, seatsByRow, zone) {
+    const isLeft = leftBlock.includes(zone);
 
-        const searchDirection = leftBlock.includes(zone) ? 'desc' : 'asc';
+    for (const row of rows) {
+        const originalSeatsInRow = seatsByRow[row]; // This is sorted correctly
+        let iterationOrderSeats = originalSeatsInRow;
 
-        if (searchDirection === 'desc') {
-            for (let i = rowSeats.length - GROUP_NUM; i >= 0; i--) {
-                const potentialGroup = rowSeats.slice(i, i + GROUP_NUM);
-                if (checkConsecutive(potentialGroup)) {
-                    return potentialGroup;
+        if (isLeft) {
+            iterationOrderSeats = [...originalSeatsInRow].reverse(); // Create a reversed copy for iteration order
+        }
+        
+        for (const startSeat of iterationOrderSeats) {
+            const group = checkConsecutive(startSeat, originalSeatsInRow, GROUP_NUM); // Always use original sorted array for checking
+            if (group.length === GROUP_NUM) {
+                const groupKey = group.map(s => s.seatk).sort().join(',');
+                if (seatGroupBlacklist.has(groupKey)) {
+                    console.log(`[Thaiticket] 策略2/3找到黑名单中的座位组 ${groupKey}，跳过。`);
+                    continue; // Skip this group and check next seat
                 }
-            }
-        } else { // 'asc'
-            for (let i = 0; i <= rowSeats.length - GROUP_NUM; i++) {
-                const potentialGroup = rowSeats.slice(i, i + GROUP_NUM);
-                if (checkConsecutive(potentialGroup)) {
-                    return potentialGroup;
-                }
+                return group;
             }
         }
     }
-    return null;
+
+    return null; // Return null if no group is found
 }
 
-function checkConsecutive(group) {
-    if (group.length < 2) return true;
-    const firstIndex = group[0].indexInRow;
-    for (let i = 1; i < group.length; i++) {
-        if (group[i].indexInRow !== firstIndex + i) {
-            return false;
+function checkConsecutive(startSeat, seatsInRow, count) {
+    if (!startSeat || count === 0) return [];
+    if (count === 1) return [startSeat];
+
+    const startIndex = seatsInRow.findIndex(seat => seat.id === startSeat.id);
+    
+    // If startSeat is not found, or there are not enough seats left in the array to form a group
+    if (startIndex === -1 || startIndex + count > seatsInRow.length) {
+        return [];
+    }
+
+    const potentialGroup = seatsInRow.slice(startIndex, startIndex + count);
+
+    // Check if all seats in the potential group are physically consecutive by their indexInRow
+    for (let i = 0; i < potentialGroup.length - 1; i++) {
+        if (potentialGroup[i+1].indexInRow !== potentialGroup[i].indexInRow + 1) {
+            return []; // The group is not consecutive
         }
     }
-    return true;
+
+    return potentialGroup; // The group is valid and consecutive
 }
 
 //endregion
@@ -412,7 +444,7 @@ async function sendValidateRequest(seatInfo,paymentFormParams) {
         }
 
         const data = await response.json();
-        console.log("Validate seat response:", data);
+        console.log("[Thaiticket] Validate seat response:", data);
         if (data.result) {
             successNum++;
         }else{
@@ -437,9 +469,9 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
             data: { targetUrl: targetUrl, refererUrl: refererUrl }
         }, response => {
             if (response && response.success) {
-                console.log('Lock request rule added, proceeding with fetch.');
+                console.log('[Thaiticket] Lock request rule added, proceeding with fetch.');
             } else {
-                console.error('Failed to add lock request rule:', response ? response.error : 'No response');
+                console.error('[Thaiticket] Failed to add lock request rule:', response ? response.error : 'No response');
             }
             resolve();
         });
@@ -472,9 +504,9 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
         pricelist += `${seatandprice[1]},`;
         seatklist += `${seatInfo.seatk},`;
     }
-    console.log("seatlist", seatlist);
-    console.log("pricelist", pricelist);
-    console.log("seatklist", seatklist);
+    // console.log("seatlist", seatlist);
+    // console.log("pricelist", pricelist);
+    // console.log("seatklist", seatklist);
     const body = new URLSearchParams({
         'ehId': paymentFormParams.ehId,
         'curentdate': paymentFormParams.curentdate, // 注意: 这个值可能需要动态生成
@@ -500,7 +532,7 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
         'inclvat': paymentFormParams.inclvat,
         'seatklist': seatklist // e.g. '8ee2c8a5a250fcdf14bc4454910e30d4,'
     });
-    console.log("body", body);
+    // console.log("body", body);
 
     try {
         const response = await fetch(targetUrl, {
@@ -515,10 +547,10 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
         }
 
         const data = await response.json();
-        console.log("Booking response:", data);
+        console.log("[Thaiticket] Lock response:", data);
         if (data.result) {
             isSuccess = true;
-            console.log("锁票成功");
+            console.log("[Thaiticket] 锁票成功");
             if (WEBHOOK_URL) {
                 sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]抢票成功 successBlock:${paymentFormParams.zone} successSeat:${seatlist}`);
             }
@@ -531,9 +563,9 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
         // Always remove the rule after the request is done
         chrome.runtime.sendMessage({ action: 'removeRefererRule' }, response => {
             if (response && response.success) {
-                console.log('Lock request rule removed successfully.');
+                console.log('[Thaiticket] Lock request rule removed successfully.');
             } else {
-                console.error('Failed to remove lock request rule:', response ? response.error : 'No response');
+                console.error('[Thaiticket] Failed to remove lock request rule:', response ? response.error : 'No response');
             }
         });
     }
@@ -554,12 +586,25 @@ async function tryLockSeat(seatsToLock, paymentFormParams) {
     while (successNum + failedNum < seatsToLock.length) {
         await sleep(100);
         if (Date.now() - startTime > TIMEOUT) {
-            console.error("Timeout: " + TIMEOUT + "ms");
+            console.error("[Thaiticket] Timeout: " + TIMEOUT + "ms");
             break;
         }
     }
     if (successNum == seatsToLock.length) {
         await sendLockRequest(seatsToLock, paymentFormParams);
+    }
+
+    // 如果尝试锁定失败（成功的票数小于期望的票数），则记录失败
+    if (successNum < seatsToLock.length) {
+        const groupKey = seatsToLock.map(s => s.seatk).sort().join(',');
+        const currentFailures = (seatGroupFailureCount.get(groupKey) || 0) + 1;
+        seatGroupFailureCount.set(groupKey, currentFailures);
+        console.log(`[Thaiticket] 座位组 ${groupKey} 锁定失败。失败次数: ${currentFailures}`);
+
+        if (currentFailures >= 2) {
+            seatGroupBlacklist.add(groupKey);
+            console.log(`[Thaiticket] 座位组 ${groupKey} 因失败 ${currentFailures} 次已被加入黑名单。`);
+        }
     }
 }
 
@@ -570,22 +615,36 @@ async function mainLoop() {
 
     initEnv();
 
-    while(botRunning) { // 添加 while 循环
-        if (!botRunning) break;
-
-        for (let zone of blockSelect) {
+    try {
+        while(botRunning) { // 添加 while 循环
             if (!botRunning) break;
-            console.log(`Checking zone: ${zone}`);
-            let data = await getFixedPage(K_VALUE, zone, RD_ID);
-            if (data) {
+
+            for (const zone of blockSelect) {
+                if (!botRunning) break;
+
+                let data = await getFixedPage(K_VALUE, zone, RD_ID);
+
+                if (!data) {
+                    console.error(`Failed to fetch data for zone ${zone}.`);
+                    continue;
+                }
+
+                if (data.includes("您的请求暂时不能处理")) {
+                    console.error("[Thaiticket] 检测到 '您的请求暂时不能处理'。可能需要输入验证码。机器人停止。");
+                    await sendFeiShuMsg("Thaiticket Bot: 检测到 '您的请求暂时不能处理'，可能需要验证码。机器人已停止，请检查页面。");
+                    stopBot();
+                    return; // Exit mainLoop
+                }
+
                 const { availableSeats, rowCounts, rowPhysicalIndex } = parseSeatsFromHTML(data);
-                console.log(`Row physical indices for zone ${zone}:`, rowPhysicalIndex);
-                console.log(`Seat counts for zone ${zone}:`, rowCounts);
+                // console.log(`[Thaiticket] Row physical indices for zone ${zone}:`, rowPhysicalIndex);
+                // console.log(`[Thaiticket] Seat counts for zone ${zone}:`, rowCounts);
                 let paymentFormParams = getPaymentFormParams(data);
 
                 let seatsToLock = getGroupSeats(availableSeats, zone, rowCounts, rowPhysicalIndex);
+
                 if (seatsToLock.length > 0) {
-                    console.log("Found seats to lock:", seatsToLock);
+                    console.log("[Thaiticket] Found seats to lock:", seatsToLock);
                     await tryLockSeat(seatsToLock, paymentFormParams);
                     if (isSuccess) {
                         stopBot();
@@ -594,9 +653,16 @@ async function mainLoop() {
                 } else {
                     console.log(`No available seats in zone ${zone}.`);
                 }
+
+                // Wait for the next refresh interval with random jitter
+                const jitter = Math.random() * 500; // Add a random jitter up to 500ms
+                const totalSleepTime = REFRESH_INTERVAL + jitter;
+                console.log(`[Thaiticket] Waiting for ${totalSleepTime.toFixed(0)}ms (base: ${REFRESH_INTERVAL}ms + jitter: ${jitter.toFixed(0)}ms) before next refresh.`);
+                await sleep(totalSleepTime);
             }
-            await sleep(REFRESH_INTERVAL);
         }
+    } catch (error) {
+        console.error("[Thaiticket] An error occurred in the main loop:", error);
     }
 }
 
@@ -612,8 +678,17 @@ function startBot(config) {
         STRATEGY2_ENABLED = config.strategy2 !== false;
         STRATEGY3_ENABLED = config.strategy3 !== false;
 
+        if (Array.isArray(config.leftBlock) && config.leftBlock.length > 0) {
+            leftBlock = config.leftBlock;
+        }
+        if (Array.isArray(config.rightBlock) && config.rightBlock.length > 0) {
+            rightBlock = config.rightBlock;
+        }
+
         console.log("Configuration updated:", {
             blockSelect,
+            leftBlock,
+            rightBlock,
             GROUP_NUM,
             REFRESH_INTERVAL,
             MAX_SEAT_ID,
@@ -627,7 +702,7 @@ function startBot(config) {
 
     if (!botRunning) {
         botRunning = true;
-        console.log("ThaiTicket Bot started!");
+        console.log("[Thaiticket] ThaiTicket Bot started!");
         // sendFeiShuMsg(WEBHOOK_URL, "ThaiTicket Bot started!");
         mainLoop();
     }
@@ -637,7 +712,7 @@ function stopBot() {
     if (botRunning) {
         botRunning = false;
         isSuccess = false;
-        console.log("ThaiTicket Bot stopped!");
+        console.log("[Thaiticket] ThaiTicket Bot stopped!");
         // sendFeiShuMsg(WEBHOOK_URL, "ThaiTicket Bot stopped!");
     }
 }
