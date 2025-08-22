@@ -1,11 +1,16 @@
 /*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
-let seatSelect = []; // 没用 todo:增加自定义选座
 let blockSelect = ["A2"]; // 自定义选区
 let WEBHOOK_URL = ''; // 飞书webhook url
-let MAX_SEAT_ID = 100; // ID最大值，超过的票不锁
 let REFRESH_INTERVAL = 1000; // 刷新时间间隔 根据网络调整
 let GROUP_NUM = 2; // 连坐数，>1时只找连坐锁
 let TIMEOUT = 5000; // 等待锁票超时时间
+let MAX_LOCK_ATTEMPTS = 3; // 最大锁票尝试次数
+let TARGET_GROUP_COUNT = 3; // 每次刷新尝试锁定座位组数
+let ROW_PCT_MIN = 0;    // "中心"排数下限百分比
+let ROW_PCT_MAX = 20;   // "中心"排数上限百分比
+let COL_PCT_MIN = 0;   // "中心"列下限百分比
+let COL_PCT_MAX = 50;   // "中心"列上限百分比
+let SIDEWAYS_ZONES = []; // 侧面舞台区域
 
 let STRATEGY1_ENABLED = true;
 let STRATEGY2_ENABLED = true;
@@ -26,6 +31,11 @@ let successSeat = null;
 let successId = "";
 let successNum = 0;
 let failedNum = 0;
+let seatQueue = []; // 可选座位队列
+let secondSeatQueue = []; // 次要座位队列
+
+// --- Main Data Structure ---
+let virtualZoneMap = []; // The complete 2D map of the zone
 
 let K_VALUE = "";
 let BASE_URL = "";
@@ -109,231 +119,253 @@ function initEnv() {
     RD_ID = rdId;
 }
 
-function parseSeatsFromHTML(htmlString) {
+// Function to parse seat data from HTML and build the virtual map
+function parseSeatsAndBuildMap(htmlString, zone) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlString, 'text/html');
+    const rows = doc.querySelectorAll('table#tableseats tr');
+    
+    const tempMap = [];
+    let maxWidth = 0;
 
-    const availableSeats = [];
-    const rowCounts = {};
-    const rowPhysicalIndex = {};
-    let physicalIndexCounter = 0;
-    const seatIndexInRow = {}; // To track the index of each seat within its row
-    const seatCells = doc.querySelectorAll('td[data-info]');
+    let currentRowName = null;
+    rows.forEach((row, rowIndex) => {
+        let colIndex = 0;
+        const rowMap = [];
+        
+        const firstCell = row.firstElementChild;
+        if (firstCell && (firstCell.tagName === 'TH' || firstCell.classList.contains('headrow'))) {
+            currentRowName = firstCell.textContent.trim();
+        }
 
-    seatCells.forEach(cell => {
-        const title = cell.getAttribute('title');
-        if (title) {
-            const [row, seatNumStr] = title.split('-');
-
-            // Assign a physical index to each new row found
-            if (rowPhysicalIndex[row] === undefined) {
-                physicalIndexCounter++;
-                rowPhysicalIndex[row] = physicalIndexCounter;
+        row.querySelectorAll('td').forEach(cell => {
+            if (cell.classList.contains('headrow')) {
+                return; // Skip the header cell itself from being processed as a seat/skip
             }
 
-            // Initialize or increment the index for the current row
-            if (seatIndexInRow[row] === undefined) {
-                seatIndexInRow[row] = 0;
-            }
-            seatIndexInRow[row]++;
-            const currentIndexInRow = seatIndexInRow[row];
-
-            // Update total row counts
-            if (rowCounts[row]) {
-                rowCounts[row]++;
+            if (cell.classList.contains('skiprow')) {
+                const colspan = parseInt(cell.getAttribute('colspan') || '1', 10);
+                for (let i = 0; i < colspan; i++) {
+                    rowMap.push(null);
+                }
+                colIndex += colspan;
             } else {
-                rowCounts[row] = 1;
-            }
+                const title = cell.getAttribute('title');
+                if (title) {
+                    const [_row, seatNumStr] = title.split('-');
+                    const finalRowName = currentRowName || _row;
+                    const seatDiv = cell.querySelector('div.seatuncheck');
+                    let seatData = null;
 
-            // Check if the seat is available
-            const seatDiv = cell.querySelector('div.seatuncheck');
-            if (seatDiv) {
-                const dataInfo = cell.getAttribute('data-info');
-                try {
-                    const seatInfo = JSON.parse(dataInfo);
-                    availableSeats.push({
-                        seat: seatInfo.seat,
-                        seatk: seatInfo.seatk,
-                        title: title,
-                        row: row,
-                        seatNum: seatNumStr,
-                        indexInRow: currentIndexInRow,
-                        physicalRowIndex: rowPhysicalIndex[row]
-                    });
-                } catch (e) {
-                    console.error("Failed to parse data-info JSON:", dataInfo, e);
+                    if (seatDiv) {
+                        const dataInfo = cell.getAttribute('data-info');
+                        try {
+                            const seatInfo = JSON.parse(dataInfo);
+                            seatData = {
+                                seat: seatInfo.seat,
+                                seatk: seatInfo.seatk,
+                                title: title,
+                                row: finalRowName,
+                                seatNum: seatNumStr,
+                                rowIndex: tempMap.length,
+                                colIndex: colIndex
+                            };
+                        } catch (e) { console.error("JSON parse error:", e); }
+                    }
+                    rowMap.push(seatData);
+                    colIndex++;
                 }
             }
+        });
+
+        if (rowMap.length > 0) {
+            tempMap.push(rowMap);
+        }
+        if (colIndex > maxWidth) {
+            maxWidth = colIndex;
         }
     });
-
-    return { availableSeats, rowCounts, rowPhysicalIndex };
-}   
-
-function getGroupSeats(seats, zone, rowCounts, rowPhysicalIndex) {
-    if (GROUP_NUM <= 1) {
-        if (leftBlock.includes(zone) && seats.length > 0) {
-            return [seats[seats.length - 1]];
-        }
-        return seats.length > 0 ? [seats[0]] : [];
-    }
-
-    // 1. Group seats by row
-    const seatsByRow = seats.reduce((acc, seat) => {
-        if (!acc[seat.row]) acc[seat.row] = [];
-        acc[seat.row].push(seat);
-        return acc;
-    }, {});
-
-    // ** crucial fix: sort seats within each row by their physical index **
-    for (const row in seatsByRow) {
-        seatsByRow[row].sort((a, b) => a.indexInRow - b.indexInRow);
-    }
-
-    // 2. Separate rows into priority and other
-    const sortedRows = Object.keys(seatsByRow).sort((a, b) => rowPhysicalIndex[a] - rowPhysicalIndex[b] );
-    const priorityRows = sortedRows.filter(row => rowPhysicalIndex[row] <= 5);
-    const otherRows = sortedRows.filter(row => rowPhysicalIndex[row] > 5)
-
-    // --- Priority 1: Center seats in the first 5 rows ---
-    if (STRATEGY1_ENABLED) {
-        let result = findCenterGroupInRows(priorityRows, seatsByRow, rowCounts, zone);
-        if (result) {
-            console.log("[Thaiticket] 策略1命中: 在前5排中间区域找到座位。", result);
-            return result;
-        }
-    }
-
-    // --- Priority 2: Any other seats in the first 5 rows (carpet search) ---
-    if (STRATEGY2_ENABLED) {
-        let result = findFirstGroupInRows(priorityRows, seatsByRow, zone);
-        if (result) {
-            console.log("[Thaiticket] 策略2命中: 在前5排找到座位。", result);
-            return result;
-        }
-    }
-
-    // --- Priority 3: Any seats in the remaining rows ---
-    if (STRATEGY3_ENABLED) {
-        let result = findFirstGroupInRows(otherRows, seatsByRow, zone);
-        if (result) {
-            console.log("[Thaiticket] 策略3命中: 在其他排找到座位。", result);
-            return result;
-        }
-    }
-
-    console.log(`[Thaiticket] 未找到 ${GROUP_NUM} 个连续的座位。`);
-    return [];
-}
-
-function findCenterGroupInRows(rows, seatsByRow, rowCounts, zone) {
-    const isLeft = leftBlock.includes(zone);
-
-    for (const row of rows) {
-        const seatsInRow = seatsByRow[row];
-        if (!seatsInRow || seatsInRow.length < GROUP_NUM) continue;
-
-        const totalSeats = rowCounts[row];
-        const centerIndex = Math.floor(totalSeats / 2);
-
-        // Define the search range: middle third of the row
-        const searchRangeStart = Math.floor(totalSeats / 3);
-        const searchRangeEnd = Math.ceil(totalSeats * 2 / 3);
-
-        let seatsToSearch = seatsInRow.filter(s => s.indexInRow >= searchRangeStart && s.indexInRow <= searchRangeEnd);
-
-        if (isLeft) {
-            // For left zones, center is the right half of the row (closer to the center aisle)
-            seatsToSearch = seatsInRow.filter(s => s.indexInRow >= centerIndex);
-        } else {
-            // For right/center zones, center is the left half of the row
-            seatsToSearch = seatsInRow.filter(s => s.indexInRow <= centerIndex);
-        }
-
-        if (seatsToSearch.length < GROUP_NUM) continue;
-
-        if (isLeft) {
-            // For left, search from right to left (higher index to lower) within the filtered group
-            for (let i = seatsToSearch.length - GROUP_NUM; i >= 0; i--) {
-                const potentialGroup = seatsToSearch.slice(i, i + GROUP_NUM);
-                const firstSeat = potentialGroup[0];
-                const fullGroup = checkConsecutive(firstSeat, seatsInRow, GROUP_NUM);
-                if (fullGroup.length === GROUP_NUM) {
-                    const groupKey = fullGroup.map(s => s.seatk).sort().join(',');
-                    if (seatGroupBlacklist.has(groupKey)) {
-                        console.log(`[Thaiticket] 策略1找到黑名单中的座位组 ${groupKey}，跳过。`);
-                        continue;
-                    }
-                    return fullGroup;
-                }
-            }
-        } else { // 'asc' for right/center
-            for (let i = 0; i <= seatsToSearch.length - GROUP_NUM; i++) {
-                const potentialGroup = seatsToSearch.slice(i, i + GROUP_NUM);
-                const firstSeat = potentialGroup[0];
-                const fullGroup = checkConsecutive(firstSeat, seatsInRow, GROUP_NUM);
-                if (fullGroup.length === GROUP_NUM) {
-                    const groupKey = fullGroup.map(s => s.seatk).sort().join(',');
-                    if (seatGroupBlacklist.has(groupKey)) {
-                        console.log(`[Thaiticket] 策略1找到黑名单中的座位组 ${groupKey}，跳过。`);
-                        continue;
-                    }
-                    return fullGroup;
-                }
-            }
-        }
-    }
-    return null;
-}
-
-function findFirstGroupInRows(rows, seatsByRow, zone) {
-    const isLeft = leftBlock.includes(zone);
-
-    for (const row of rows) {
-        const originalSeatsInRow = seatsByRow[row]; // This is sorted correctly
-        let iterationOrderSeats = originalSeatsInRow;
-
-        if (isLeft) {
-            iterationOrderSeats = [...originalSeatsInRow].reverse(); // Create a reversed copy for iteration order
-        }
-        
-        for (const startSeat of iterationOrderSeats) {
-            const group = checkConsecutive(startSeat, originalSeatsInRow, GROUP_NUM); // Always use original sorted array for checking
-            if (group.length === GROUP_NUM) {
-                const groupKey = group.map(s => s.seatk).sort().join(',');
-                if (seatGroupBlacklist.has(groupKey)) {
-                    console.log(`[Thaiticket] 策略2/3找到黑名单中的座位组 ${groupKey}，跳过。`);
-                    continue; // Skip this group and check next seat
-                }
-                return group;
-            }
-        }
-    }
-
-    return null; // Return null if no group is found
-}
-
-function checkConsecutive(startSeat, seatsInRow, count) {
-    if (!startSeat || count === 0) return [];
-    if (count === 1) return [startSeat];
-
-    const startIndex = seatsInRow.findIndex(seat => seat.id === startSeat.id);
     
-    // If startSeat is not found, or there are not enough seats left in the array to form a group
-    if (startIndex === -1 || startIndex + count > seatsInRow.length) {
-        return [];
-    }
+    // Normalize the map to a perfect rectangle
+    let initialMap = tempMap.map(row => {
+        const newRow = [...row];
+        while (newRow.length < maxWidth) {
+            newRow.push(null);
+        }
+        return newRow;
+    });
 
-    const potentialGroup = seatsInRow.slice(startIndex, startIndex + count);
-
-    // Check if all seats in the potential group are physically consecutive by their indexInRow
-    for (let i = 0; i < potentialGroup.length - 1; i++) {
-        if (potentialGroup[i+1].indexInRow !== potentialGroup[i].indexInRow + 1) {
-            return []; // The group is not consecutive
+    // --- Rotate matrix and update coordinates if it's a sideways zone ---
+    const isLeft = leftBlock.includes(zone);
+    let finalMap = initialMap;
+    if (SIDEWAYS_ZONES.includes(zone)) {
+        if (isLeft) {
+            finalMap = rotateMatrixCounterClockwise(initialMap);
+        } else {
+            finalMap = rotateMatrixClockwise(initialMap);
         }
     }
 
-    return potentialGroup; // The group is valid and consecutive
+    virtualZoneMap = finalMap;
+}
+
+
+function rotateMatrixClockwise(matrix) {
+    const rows = matrix.length;
+    const cols = matrix[0].length;
+    const newMatrix = Array.from({ length: cols }, () => Array(rows).fill(null));
+
+    for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) {
+            const seat = matrix[i][j];
+            if (seat) {
+                seat.rowIndex = j;
+                seat.colIndex = rows - 1 - i;
+            }
+            newMatrix[j][rows - 1 - i] = seat;
+        }
+    }
+    return newMatrix;
+}
+
+function rotateMatrixCounterClockwise(matrix) {
+    const rows = matrix.length;
+    const cols = matrix[0].length;
+    const newMatrix = Array.from({ length: cols }, () => Array(rows).fill(null));
+
+    for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) {
+            const seat = matrix[i][j];
+            if (seat) {
+                seat.rowIndex = cols - 1 - j;
+                seat.colIndex = i;
+            }
+            newMatrix[cols - 1 - j][i] = seat;
+        }
+    }
+    return newMatrix;
+}
+
+function findAllHorizontalGroups(matrix) {
+    const foundGroups = [];
+    if (GROUP_NUM <= 0 || !matrix.length) return foundGroups;
+    const maxWidth = matrix[0].length;
+    const numRows = matrix.length;
+
+    for (let rowIndex = 0; rowIndex < numRows; rowIndex++) {
+        const row = matrix[rowIndex];
+        if (!row) continue;
+
+        for (let colIndex = 0; colIndex <= maxWidth - GROUP_NUM; colIndex++) {
+            const potentialGroup = [];
+            let isGroupValid = true;
+
+            for (let i = 0; i < GROUP_NUM; i++) {
+                const seat = matrix[rowIndex][colIndex + i];
+                if (seat) {
+                    potentialGroup.push(seat);
+                } else {
+                    isGroupValid = false;
+                    break;
+                }
+            }
+
+            if (isGroupValid && potentialGroup.length === GROUP_NUM) {
+                const groupIdentifier = potentialGroup.map(s => s.seat).sort().join(',');
+                if (!seatGroupBlacklist.has(groupIdentifier)) {
+                    foundGroups.push(potentialGroup);
+                }
+            }
+        }
+    }
+    return foundGroups;
+}
+
+
+function getGroupSeats(zone) {
+    const allFoundGroups = [];
+    const usedSeatKs = new Set();
+
+    const addUniqueGroups = (groups) => {
+        for (const group of groups) {
+            if (allFoundGroups.length >= TARGET_GROUP_COUNT) return;
+
+            const groupIdentifier = group.map(s => s.seat).sort().join(',');
+            if (seatGroupBlacklist.has(groupIdentifier)) {
+                continue; // Explicitly skip blacklisted groups here as a safeguard
+            }
+
+            const isOverlapping = group.some(seat => usedSeatKs.has(seat.seatk));
+            if (!isOverlapping) {
+                allFoundGroups.push(group);
+                group.forEach(seat => usedSeatKs.add(seat.seatk));
+            }
+        }
+    };
+
+    const isSideways = SIDEWAYS_ZONES.includes(zone);
+    const isLeft = leftBlock.includes(zone);
+
+    // --- Strategy-based filtering ---
+    // This logic is now universal, operating on the final, standardized virtualZoneMap.
+    // "Priority" (front rows) is defined by rowIndex.
+    // "Center" is defined by colIndex.
+
+    // 1. Define priority and center limits based on the final map dimensions.
+    const totalRows = virtualZoneMap.length;
+    const priorityRowMin = Math.floor(totalRows * (ROW_PCT_MIN / 100));
+    const priorityRowMax = Math.ceil(totalRows * (ROW_PCT_MAX / 100));
+
+    const mapWidth = virtualZoneMap[0]?.length || 0;
+    const minPct = Math.min(COL_PCT_MIN, COL_PCT_MAX);
+    const maxPct = Math.max(COL_PCT_MIN, COL_PCT_MAX);
+    
+    // For sideways zones, the meaning of "left" is inverted after rotation.
+    // We use an XOR to determine if we should use the inverted percentage logic.
+    const shouldInvertColPct = isLeft ^ isSideways;
+
+    let centerColStart, centerColEnd;
+    if (shouldInvertColPct) {
+        centerColStart = Math.floor(mapWidth * (100 - maxPct) / 100);
+        centerColEnd = Math.floor(mapWidth * (100 - minPct) / 100);
+    } else {
+        centerColStart = Math.floor(mapWidth * minPct / 100);
+        centerColEnd = Math.floor(mapWidth * maxPct / 100);
+    }
+
+    // 2. Find all possible groups (always horizontal on the final map)
+    const allGroups = findAllHorizontalGroups(virtualZoneMap);
+
+    // 3. Classify all found groups into their respective strategies first.
+    const strategy1Groups = [];
+    const strategy2Groups = [];
+    const strategy3Groups = [];
+
+    for (const group of allGroups) {
+        const isInPriority = group.some(seat => seat.rowIndex >= priorityRowMin && seat.rowIndex <= priorityRowMax);
+        const isInCenter = group.some(seat => seat.colIndex >= centerColStart && seat.colIndex <= centerColEnd);
+
+        if (isInPriority && isInCenter) {
+            strategy1Groups.push(group);
+        } else if (isInPriority) {
+            strategy2Groups.push(group);
+        } else {
+            strategy3Groups.push(group);
+        }
+    }
+
+    // 4. Build the final list by adding groups in strict priority order.
+    if (STRATEGY1_ENABLED) {
+        addUniqueGroups(strategy1Groups);
+    }
+    if (allFoundGroups.length < TARGET_GROUP_COUNT && STRATEGY2_ENABLED) {
+        addUniqueGroups(strategy2Groups);
+    }
+    if (allFoundGroups.length < TARGET_GROUP_COUNT && STRATEGY3_ENABLED) {
+        addUniqueGroups(strategy3Groups);
+    }
+
+    return allFoundGroups;
 }
 
 //endregion
@@ -378,7 +410,7 @@ async function getFixedPage(k, zone, round) {
         console.error('Fetch error:', error);
         return null;
     }
-}
+}   
 
 async function sendValidateRequest(seatInfo,paymentFormParams) {
     const url = `https://booking.thaiticketmajor.com/booking/3m/validateseat.php?k=${K_VALUE}&zw=${paymentFormParams.zone}`;
@@ -455,7 +487,7 @@ async function sendValidateRequest(seatInfo,paymentFormParams) {
         console.error('Fetch error:', error);
         return null;
     }
-}
+} 
 
 
 async function sendLockRequest(seatInfoList,paymentFormParams) {
@@ -601,7 +633,7 @@ async function tryLockSeat(seatsToLock, paymentFormParams) {
         seatGroupFailureCount.set(groupKey, currentFailures);
         console.log(`[Thaiticket] 座位组 ${groupKey} 锁定失败。失败次数: ${currentFailures}`);
 
-        if (currentFailures >= 2) {
+        if (currentFailures >= MAX_LOCK_ATTEMPTS) {
             seatGroupBlacklist.add(groupKey);
             console.log(`[Thaiticket] 座位组 ${groupKey} 因失败 ${currentFailures} 次已被加入黑名单。`);
         }
@@ -636,22 +668,37 @@ async function mainLoop() {
                     return; // Exit mainLoop
                 }
 
-                const { availableSeats, rowCounts, rowPhysicalIndex } = parseSeatsFromHTML(data);
-                // console.log(`[Thaiticket] Row physical indices for zone ${zone}:`, rowPhysicalIndex);
-                // console.log(`[Thaiticket] Seat counts for zone ${zone}:`, rowCounts);
+                parseSeatsAndBuildMap(data, zone);
+                
+                // --- PRINT THE MAP FOR INSPECTION ---
+                // console.log(`[Thaiticket] Virtual map for zone ${zone}:`);
+                // console.table(virtualZoneMap);
+
                 let paymentFormParams = getPaymentFormParams(data);
+                
+                let seatGroups = getGroupSeats(zone);
+                
+                console.log(`[Thaiticket] Found ${seatGroups.length} group(s) to lock:`, seatGroups);
 
-                let seatsToLock = getGroupSeats(availableSeats, zone, rowCounts, rowPhysicalIndex);
-
-                if (seatsToLock.length > 0) {
-                    console.log("[Thaiticket] Found seats to lock:", seatsToLock);
-                    await tryLockSeat(seatsToLock, paymentFormParams);
-                    if (isSuccess) {
-                        stopBot();
-                        return; // 使用 return 直接退出 mainLoop 函数
+                if (seatGroups.length > 0) {
+                    console.log(`[Thaiticket] Found ${seatGroups.length} group(s) to lock:`, seatGroups);
+                    // Sequentially attempt to lock each group
+                    for (const group of seatGroups) {
+                        console.log(`[Thaiticket] Attempting to lock group:`, group);
+                        await tryLockSeat(group, paymentFormParams);
+                        
+                        // If this attempt was successful, stop the bot and exit
+                        if (isSuccess) {
+                            stopBot();
+                            return; // Exit the main loop entirely
+                        }
+                        const jitter = Math.random() * 500; // Add a random jitter up to 500ms
+                        const totalSleepTime = REFRESH_INTERVAL + jitter;
+                        console.log(`[Thaiticket] Waiting for ${totalSleepTime.toFixed(0)}ms (base: ${REFRESH_INTERVAL}ms + jitter: ${jitter.toFixed(0)}ms) before next refresh.`);
+                        await sleep(totalSleepTime);
                     }
                 } else {
-                    console.log(`No available seats in zone ${zone}.`);
+                    console.log(`[Thaiticket] No lockable groups found in zone ${zone}.`);
                 }
 
                 // Wait for the next refresh interval with random jitter
@@ -671,9 +718,13 @@ function startBot(config) {
         blockSelect = config.blockSelect || ["A2"];
         GROUP_NUM = config.groupNum || 2;
         REFRESH_INTERVAL = config.refreshInterval || 1000;
-        MAX_SEAT_ID = config.maxSeatId || 100;
         TIMEOUT = config.timeout || 5000;
         WEBHOOK_URL = config.webhookUrl || '';
+        ROW_PCT_MIN = config.rowPctMin ?? 0;
+        ROW_PCT_MAX = config.rowPctMax || 20;
+        COL_PCT_MIN = config.colPctMin ?? 25;
+        COL_PCT_MAX = config.colPctMax || 75;
+        SIDEWAYS_ZONES = Array.isArray(config.sidewaysZones) ? config.sidewaysZones : [];
         STRATEGY1_ENABLED = config.strategy1 !== false;
         STRATEGY2_ENABLED = config.strategy2 !== false;
         STRATEGY3_ENABLED = config.strategy3 !== false;
@@ -691,9 +742,13 @@ function startBot(config) {
             rightBlock,
             GROUP_NUM,
             REFRESH_INTERVAL,
-            MAX_SEAT_ID,
             TIMEOUT,
             WEBHOOK_URL,
+            ROW_PCT_MIN,
+            ROW_PCT_MAX,
+            COL_PCT_MIN,
+            COL_PCT_MAX,
+            SIDEWAYS_ZONES,
             STRATEGY1_ENABLED,
             STRATEGY2_ENABLED,
             STRATEGY3_ENABLED
