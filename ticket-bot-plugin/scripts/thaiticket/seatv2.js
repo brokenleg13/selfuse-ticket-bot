@@ -69,12 +69,24 @@ function getKValue() {
     return null;
 }
 
-function getrdId() {
-    const rdIdElement = document.getElementById("rdId").children;
-    if (rdIdElement && rdIdElement.length > 0) {
-        return rdIdElement[0].value;
+
+function getrdId(day) {
+    const selectElement = document.getElementById("rdId");
+    if (!selectElement) {
+        console.error('Could not find select element with id "rdId"');
+        return null;
     }
-    console.error('Could not find input element with name "rdId"');
+
+    const options = selectElement.options;
+    for (let i = 0; i < options.length; i++) {
+        const option = options[i];
+        // 检查选项的文本内容是否包含目标日期字符串
+        if (option.text.includes(day)) {
+            return option.value;
+        }
+    }
+
+    console.error(`Could not find an option matching the date "${targetDate}"`);
     return null;
 }
 
@@ -110,10 +122,10 @@ function getPaymentFormParams(htmlString) {
 }
 
 
-function initEnv() {
+function initEnv(day) {
     let k = getKValue();
     let baseUrl = getBaseUrl();
-    let rdId = getrdId();
+    let rdId = getrdId(day);
     K_VALUE = k;
     BASE_URL = baseUrl;
     RD_ID = rdId;
@@ -646,7 +658,7 @@ async function mainLoop() {
     if (!botRunning) return;
     console.log("Bot loop running...");
 
-    initEnv();
+    initEnv(day);
 
     try {
         while(botRunning) { // 添加 while 循环
