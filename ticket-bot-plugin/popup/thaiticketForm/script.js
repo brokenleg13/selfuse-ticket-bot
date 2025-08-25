@@ -23,6 +23,8 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function getThaiConfigFromInputs() {
+    const ticketUrl = document.getElementById('ticketUrl').value;
+    const ticketTime = document.getElementById('ticketTime').value;
     const blockSelect = document.getElementById('blockSelect').value.split(',').map(s => s.trim()).filter(Boolean);
     const leftBlock = document.getElementById('leftBlock').value.split(',').map(s => s.trim()).filter(Boolean);
     const rightBlock = document.getElementById('rightBlock').value.split(',').map(s => s.trim()).filter(Boolean);
@@ -40,6 +42,8 @@ function getThaiConfigFromInputs() {
     const strategy3 = document.getElementById('strategy3').checked;
 
     return {
+        ticketUrl,
+        ticketTime,
         blockSelect,
         leftBlock,
         rightBlock,
@@ -67,6 +71,8 @@ async function saveThaiConfig() {
 async function loadThaiConfig() {
     const config = await get_stored_value('thaiConfig');
     if (config) {
+        document.getElementById('ticketUrl').value = config.ticketUrl || '';
+        document.getElementById('ticketTime').value = config.ticketTime || '';
         document.getElementById('blockSelect').value = Array.isArray(config.blockSelect) ? config.blockSelect.join(',') : (config.blockSelect || '');
         document.getElementById('leftBlock').value = Array.isArray(config.leftBlock) ? config.leftBlock.join(',') : (config.leftBlock || 'A1,B1,C1');
         document.getElementById('rightBlock').value = Array.isArray(config.rightBlock) ? config.rightBlock.join(',') : (config.rightBlock || 'A2,B3,C2');

@@ -65,6 +65,7 @@
         },
         {
             "matches": [
+                "https://www.thaiticketmajor.com/performance/*",
                 "https://booking.thaiticketmajor.com/booking/3m/zones.php*"
             ],
             "js": [
@@ -72,6 +73,7 @@
                 "scripts/common/hourToPm.js",
                 "scripts/common/storage.js",
                 "scripts/common/sleep.js",
+                "scripts/thaiticket/concert.js",
                 "scripts/thaiticket/seatv2.js"
             ],
             "run_at": "document_end"

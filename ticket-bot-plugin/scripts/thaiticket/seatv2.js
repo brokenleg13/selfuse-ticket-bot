@@ -4,7 +4,7 @@ let WEBHOOK_URL = ''; // 飞书webhook url
 let REFRESH_INTERVAL = 1000; // 刷新时间间隔 根据网络调整
 let GROUP_NUM = 2; // 连坐数，>1时只找连坐锁
 let TIMEOUT = 5000; // 等待锁票超时时间
-let MAX_LOCK_ATTEMPTS = 3; // 最大锁票尝试次数
+let MAX_LOCK_ATTEMPTS = 1; // 最大锁票尝试次数
 let TARGET_GROUP_COUNT = 3; // 每次刷新尝试锁定座位组数
 let ROW_PCT_MIN = 0;    // "中心"排数下限百分比
 let ROW_PCT_MAX = 20;   // "中心"排数上限百分比
@@ -271,7 +271,7 @@ function findAllHorizontalGroups(matrix) {
             }
 
             if (isGroupValid && potentialGroup.length === GROUP_NUM) {
-                const groupIdentifier = potentialGroup.map(s => s.seat).sort().join(',');
+                const groupIdentifier = potentialGroup.map(s => s.seatk).sort().join(',');
                 if (!seatGroupBlacklist.has(groupIdentifier)) {
                     foundGroups.push(potentialGroup);
                 }
@@ -290,7 +290,7 @@ function getGroupSeats(zone) {
         for (const group of groups) {
             if (allFoundGroups.length >= TARGET_GROUP_COUNT) return;
 
-            const groupIdentifier = group.map(s => s.seat).sort().join(',');
+            const groupIdentifier = group.map(s => s.seatk).sort().join(',');
             if (seatGroupBlacklist.has(groupIdentifier)) {
                 continue; // Explicitly skip blacklisted groups here as a safeguard
             }
@@ -714,7 +714,25 @@ async function mainLoop() {
     }
 }
 
-function startBot(config) {
+async function startBot(config) {
+    let ticketUrl = config.ticketUrl || "";
+    let ticketTime = config.ticketTime || "";
+    let currentUrl = window.location.href;
+    if (currentUrl.includes(ticketUrl)) {
+        console.log("[Thaiticket] 当前页面是开票详情页，开始轮询获取开票链接。");
+        let url = await searchConcert(ticketUrl, ticketTime);
+        if (url) {
+            console.log("[Thaiticket] 成功获取到开票链接:", url);
+            window.location.href = url; // 跳转到开票链接
+            return;
+        } else {
+            console.log("[Thaiticket] 轮询超时，未能获取到开票链接。");
+            return;
+        }
+    } else {
+        console.log("[Thaiticket] 当前页面不是开票详情页，开始抢票。");
+    }
+
     if (config) {
         blockSelect = config.blockSelect || ["A2"];
         GROUP_NUM = config.groupNum || 2;
