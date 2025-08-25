@@ -611,17 +611,18 @@ async function tryLockSeat(seatsToLock, paymentFormParams) {
     successNum = 0;
     failedNum = 0;
 
-    let startTime = Date.now();
+    // let startTime = Date.now();
     for (let seat of seatsToLock) {
-        sendValidateRequest(seat, paymentFormParams);
+        await sendValidateRequest(seat, paymentFormParams);
     }
-    while (successNum + failedNum < seatsToLock.length) {
-        await sleep(100);
-        if (Date.now() - startTime > TIMEOUT) {
-            console.error("[Thaiticket] Timeout: " + TIMEOUT + "ms");
-            break;
-        }
-    }
+    // while (successNum + failedNum < seatsToLock.length) {
+    //     await sleep(100);
+    //     if (Date.now() - startTime > TIMEOUT) {
+    //         console.error("[Thaiticket] Timeout: " + TIMEOUT + "ms");
+    //         break;
+    //     }
+    // }
+    await sleep(500);
     if (successNum == seatsToLock.length) {
         await sendLockRequest(seatsToLock, paymentFormParams);
     }
