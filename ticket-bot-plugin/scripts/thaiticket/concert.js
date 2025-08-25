@@ -79,8 +79,8 @@ async function searchConcert(ticketUrl, ticketTime){
     if (ticketTimeObj < new Date()) {
         pollingTimeout = new Date(new Date().getTime() + 10000);
     } else {
-        // 轮询将在开票时间后1分钟超时
-        pollingTimeout = new Date(ticketTimeObj.getTime() + 60000);
+        // 轮询将在开票时间后10秒超时
+        pollingTimeout = new Date(ticketTimeObj.getTime() + 10000);
     }
 
     const pollForUrl = async () => {
@@ -92,7 +92,7 @@ async function searchConcert(ticketUrl, ticketTime){
                 return url;
             }
             // 等待一小段时间再重试
-            await sleep(2000);
+            await sleep(1500+Math.random()*500);
         }
         console.log("[Thaiticket] 轮询超时，未能获取到开票链接。");
         return null;
@@ -104,7 +104,7 @@ async function searchConcert(ticketUrl, ticketTime){
         console.log("[Thaiticket] 当前时间已过开票时间，立即开始获取链接。");
         return await pollForUrl();
     } else {
-        const pollingStartTime = new Date(ticketTimeObj.getTime() - 10000); // 提前10秒
+        const pollingStartTime = new Date(ticketTimeObj.getTime() - 2000); // 提前2秒
         console.log("[Thaiticket] 当前时间:", currentTime);
         console.log("[Thaiticket] 轮询开始时间:", pollingStartTime);
         if(pollingStartTime > currentTime){
