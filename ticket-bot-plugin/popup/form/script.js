@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', function  () {
         data["platform"] = form.getElementsByTagName("button")[0].id;
         let array = await get_stored_value("autoBooking") || [];
         store_value(data["concert-id"], data);
+        store_value(data["feishu-bot-id"], data);
         array.push(data);
         store_value("autoBooking", array);
         window.history.back();

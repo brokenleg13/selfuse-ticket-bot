@@ -17,7 +17,7 @@ body {
 .button-row {
     display: flex;
     justify-content: space-around;
-    gap: 20px;
+    gap: 15px;
 }
 
 .button-concert {
@@ -25,9 +25,9 @@ body {
     color: #333; /* Updated text color */
     border: 1px solid #ddd; /* Added a subtle border */
     border-radius: 8px;
-    padding: 15px;
-    width: 100px;
-    font-size: 18px;
+    padding: 10px;
+    width: 80px;
+    font-size: 14px;
     font-weight: bold;
     cursor: pointer;
     display: flex;

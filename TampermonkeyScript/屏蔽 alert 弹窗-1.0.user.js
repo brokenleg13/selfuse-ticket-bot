@@ -5,6 +5,7 @@
 // @description  屏蔽 ticket.yes24.com 的 alert 弹窗
 // @author       YourName
 // @match        *://ticket.yes24.com/*
+// @match        *://tkglobal.melon.com/*
 // @grant        none
 // ==/UserScript==
 
