@@ -5,6 +5,12 @@
 
 # FolkDes:
 
+## 2025-10-09 update
+### feat:
+- 更新Melon前端刷票
+- 支持配置飞书webhook通知
+
+
 ## 2025-08-25 update
 ### feat:
 - 更新ThaiTicket抢票助手，增加自定义配置页面和手动启停
