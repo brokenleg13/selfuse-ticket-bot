@@ -84,7 +84,7 @@ async function searchSeat(data) {
             checkCaptchaFinish();
             return;
         }
-        await sleep(600 + Math.random() * 500);
+        await sleep(750 + Math.random() * 500);
     }
     await searchSeat(data);
 }
