@@ -84,7 +84,7 @@ async function searchSeat(data) {
             checkCaptchaFinish();
             return;
         }
-        await sleep(800 + Math.random() * 500);
+        await sleep(600 + Math.random() * 500);
     }
     await searchSeat(data);
 }
@@ -111,7 +111,7 @@ async function waitFirstLoad() {
     await waitForVerifyCaptchaClose();
     openRangeList();
     await sleep(1000);
-    searchSeat(data);
+    await searchSeat(data);
     sendFeiShuMsg(feishuBotId, `[${new Date().toLocaleString()}]抢票成功`);
 }
 
