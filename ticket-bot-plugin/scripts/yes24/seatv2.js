@@ -408,6 +408,7 @@ async function sendSeatLockRequest(block,seatId,sendmsg=false) {
             const message = messageMatch ? messageMatch[1] : '';
             
             console.log(`[DEBUG] 响应Code: ${code}, Message: ${message}`);
+            // sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位接口锁定响应: block:${block} seat:${seatId} Code:${code} Message:${message}`);
             
             if (code === 'None') {
                 isSuccess = true; // 设置成功标志
@@ -508,17 +509,23 @@ function parseResponse(xmlString) {
                     
                     let seatElementIdx = layoutSortById["t"+seatId];
                     if (!sendedIdList[seatId]){
-                        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]刷到座位 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
+                        if (seatQueue.length > 2) {
+                            return;
+                        }
+                        // sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]刷到座位 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
                         sendedIdList[seatId] = true;
                     }
                     // 检查是否站票超过ID最大值
-                    if (seatElementIdx && seatElementIdx > MAX_SEAT_ID && block.toString().startsWith("1")) {
-                        // sendFeiShuMsg(WEBHOOK_URL, `站票超过ID最大值，不锁票 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
-                        return;
-                    }
+                    // if (seatElementIdx && seatElementIdx > MAX_SEAT_ID && block.toString().startsWith("1")) {
+                    //     // sendFeiShuMsg(WEBHOOK_URL, `站票超过ID最大值，不锁票 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
+                    //     return;
+                    // }
                     
                     if (!isSuccess) {
                         if (chooseable == "0") {
+                            if (seatQueue.length > 2) {
+                                return;
+                            }
                             console.log(`[YES24 info] chooseable==0 发现空座，直接接口锁定: block:${block} seat:${seatId},index:${seatElementIdx},seatInfo:${seatInfo}`);
                             addSeatToQueue(seat);
                             sendFeiShuMsg(WEBHOOK_URL,`[${new Date().toLocaleString()}]刷到空座，直接接口锁定 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
@@ -555,7 +562,7 @@ async function searchSeat() {
         sendSearchSeatRequest(blockSelect[i]);
         i = (i + 1) % blockSelect.length;
         requestCount++;
-        await sleep(50);
+        await sleep(500);
         if (requestCount % 8 === 0) {
             requestCount = 0;
             await sleep(REFRESH_INTERVAL);
