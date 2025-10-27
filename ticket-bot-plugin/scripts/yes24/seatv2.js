@@ -1,11 +1,7 @@
 /*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
-let seatSelect = []; // 没用 todo:增加自定义选座
-let blockSelect = [301,302,303,306,307,308,311,312,313,316,317,318,101,102,103,104,105,106]; // 自定义选区
-let SEAT_MAX_CLICK_COUNT = 30; // 单个座位最大点击次数
-let WEBHOOK_URL = ''; // 飞书webhook url
 let USERID = ''; // 用户id 抓包自己看
-let MAX_SEAT_ID = 300; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
-let REFRESH_INTERVAL = 500; // 刷新时间间隔 根据网络调整
+let MAX_SEAT_ID = 999; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
+let REFRESH_INTERVAL = 800; // 刷新时间间隔 根据网络调整
 
 
 /*--------------------------------- 勿修改 ---------------------------------*/
@@ -17,6 +13,8 @@ concertcfg.idCustomer = USERID // idCustomer
 let successBlock = "";
 let successId = "";
 let sendedIdList = [];
+let WEBHOOK_URL = '';
+let blockSelect = []; // 自定义选区
 
 // region 队列
 let seatQueue = [];// 可选座位队列
@@ -42,7 +40,42 @@ function getConcertId() {
     return concertId;
 }
 
+// 断言日期页面打开
+function assertDatePageOpen() {
+    const el = document.querySelector('#ContentsArea');
+    if (el && el.style.display === 'block') {
+        console.log('✅ 日期页面打开');
+        return true;
+    } else {
+        console.log('❌ 日期页面未打开');
+        return false;
+    }
+}
+
+// 断言选座页面打开
+function assertSeatPageOpen() {
+    const frame = theFrame();
+    if (!frame) {
+        return false;
+    }
+    let seatArray = frame.getElementById("divSeatArray").children;
+    if (seatArray && seatArray.length > 0) {
+        console.log('✅ 选座页面打开');
+        return true;
+    } else {
+        console.log('❌ 选座页面未打开');
+        return false;
+    }
+}
+
 async function selectDate(data) {
+    var hasDate = false;
+    if (!data || !data.date || !data.time) {
+        return false;
+    }
+    while(!assertDatePageOpen()){
+        await sleep(1000);
+    }
     let date = data.date;
     let time = data.time;
     if (date) {
@@ -55,11 +88,14 @@ async function selectDate(data) {
             for (let i = 0; i < lis.length; i++) {
                 if (lis[i].innerText.includes(time)) {
                     lis[i].click();
+                    hasDate = true;
                 }
             }
         }
     }
+    await sleep(500);
     document.getElementById("btnSeatSelect").click();
+    return hasDate;
 }
 
 function TampermonkeyClick() {
@@ -72,6 +108,9 @@ function TampermonkeyClick() {
 
 
 function theFrame() {
+    if (!window.frames || window.frames.length == 0) {
+        return null;
+    }
     return window.frames[0].document;
 }
 
@@ -538,19 +577,39 @@ async function trySecondSeat(){
 async function lockSeat() {
     let concertId = getConcertId();
     let data = await get_stored_value(concertId);
+    if (!data) {
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]获取演出信息失败`);
+        console.log('❌ 获取演出信息失败');
+        return;
+    }
+    WEBHOOK_URL = data["feishu-bot-id"];
+    blockSelect = data.section
+    console.log(WEBHOOK_URL)
+    console.log(blockSelect);
+    if (blockSelect.length == 0) {
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位区域为空，请配置座位区域`);
+        console.log('❌ 座位区域为空，请配置座位区域');
+        return;
+    }
     await sleep(3000);
-    selectDate(data);
-    await sleep(2000);
+    var hasDate = await selectDate(data);
+    if (!hasDate) {
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]日期选择失败 请手动选择日期`);
+        console.log('❌ 日期选择失败 请手动选择日期');
+    }
+    while(!assertSeatPageOpen()){
+        await sleep(1000);
+    }
     searchSeat(); // 启动爬虫
-    selectRange(1);
+    // selectRange(1);
     while (!isSuccess) {
         if (seatQueue.length > 0) {
             let seat = getSeatFromQueue();
             if (seat) {
-                sendSeatLockRequest(seat.block,seat.id,true)
+                await sendSeatLockRequest(seat.block,seat.id,true)
             }
             popSeatFromQueue();
-            await sleep(300)
+            await sleep(1000)
         }else{
             await sleep(10);
         }
