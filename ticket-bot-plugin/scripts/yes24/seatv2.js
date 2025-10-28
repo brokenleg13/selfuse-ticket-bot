@@ -1,7 +1,8 @@
 /*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
 let USERID = ''; // 用户id 抓包自己看
 let MAX_SEAT_ID = 999; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
-let REFRESH_INTERVAL = 800; // 刷新时间间隔 根据网络调整
+let SINGLE_REQUEST_INTERVAL = 100; // 单个页面请求间隔时间
+let REFRESH_INTERVAL = 800; // 一组页面请求间隔时间
 
 
 /*--------------------------------- 勿修改 ---------------------------------*/
@@ -18,7 +19,6 @@ let blockSelect = []; // 自定义选区
 
 // region 队列
 let seatQueue = [];// 可选座位队列
-let secondSeatQueue = [];// 被锁过的座位队列 碰运气
 function addSeatToQueue(seat) {
     seatQueue.push(seat);
 }
@@ -34,6 +34,8 @@ function popSeatFromQueue() {
 
 
 //region 页面操作
+
+// 获取演出ID
 function getConcertId() {
     let url = window.location.href;
     let concertId = url.split("=")[1];
@@ -67,7 +69,7 @@ function assertSeatPageOpen() {
         return false;
     }
 }
-
+// 选择日期
 async function selectDate(data) {
     var hasDate = false;
     if (!data || !data.date || !data.time) {
@@ -98,6 +100,7 @@ async function selectDate(data) {
     return hasDate;
 }
 
+// 触发TampermonkeyClick事件
 function TampermonkeyClick() {
     // 直接触发自定义事件，而不是依赖storage事件
     const clickEvent = new CustomEvent('tampermonkey-click', {
@@ -107,6 +110,7 @@ function TampermonkeyClick() {
 }
 
 
+// 获取iframe
 function theFrame() {
     if (!window.frames || window.frames.length == 0) {
         return null;
@@ -114,6 +118,7 @@ function theFrame() {
     return window.frames[0].document;
 }
 
+// 获取top window
 function theTopWindow() {
     return window.document;
 }
@@ -124,7 +129,7 @@ function getCookie() {
     return frame.cookie;
 }
 
-// 获取iframe中的idHall, idTime, idCustomer
+// 获取iframe中的idHall, idTime
 function getUserInfo() {
     console.log('[DEBUG] 开始获取用户信息...');
 
@@ -154,10 +159,13 @@ function getUserInfo() {
     }
 }
 
+// 点击下一步
 function clickStepCtrlBtn03() {
     let frame = theTopWindow();
     frame.getElementById("StepCtrlBtn03").children[1].click();
 }
+
+// 点击下一步
 function clickStepCtrlBtn04() {
     let frame = theTopWindow();
     frame.getElementById("StepCtrlBtn04").children[1].click();
@@ -172,7 +180,7 @@ function openPayment() {
     frame.getElementById("StepCtrlBtn05").children[1].click();
 }
 
-// 断言锁定成功
+// 断言锁定成功 下一步按钮显示
 function assertLockSuccess() {
     let frame = theTopWindow();
     const el = frame.querySelector('#StepCtrlBtn03');
@@ -529,9 +537,6 @@ function parseResponse(xmlString) {
                             console.log(`[YES24 info] chooseable==0 发现空座，直接接口锁定: block:${block} seat:${seatId},index:${seatElementIdx},seatInfo:${seatInfo}`);
                             addSeatToQueue(seat);
                             sendFeiShuMsg(WEBHOOK_URL,`[${new Date().toLocaleString()}]刷到空座，直接接口锁定 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
-                        }else{
-                            console.log(`[YES24 info] chooseable!=0 发现可能可用座位，加入列表尝试: block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`);
-                            secondSeatQueue.push(seat);
                         }
                     }
                 }
@@ -546,13 +551,13 @@ function parseResponse(xmlString) {
 // producer：搜索可用座位添加到列表
 async function searchSeat() {
     getUserInfo();
-    await sleep(1000);
     let i = 0;
     let requestCount = 0;
     await sleep(1000);
+    // 一直循环遍历blockSelect
     while (!isSuccess) {
         if (seatQueue.length > 0) {
-            await sleep(10);
+            await sleep(50);
             continue;
         }
         if (isSuccess) {
@@ -562,20 +567,10 @@ async function searchSeat() {
         sendSearchSeatRequest(blockSelect[i]);
         i = (i + 1) % blockSelect.length;
         requestCount++;
-        await sleep(500);
+        await sleep(SINGLE_REQUEST_INTERVAL);
         if (requestCount % 8 === 0) {
             requestCount = 0;
             await sleep(REFRESH_INTERVAL);
-        }
-    }
-}
-
-async function trySecondSeat(){
-    if (seatQueue.length == 0 && secondSeatQueue.length > 0 && !isSuccess) {
-        let seat = secondSeatQueue.shift();
-        if (seat) {
-            sendSeatLockRequest(seat.block,seat.id,true)
-            await sleep(2000);
         }
     }
 }
@@ -605,7 +600,7 @@ async function lockSeat() {
         console.log('❌ 日期选择失败 请手动选择日期');
     }
     while(!assertSeatPageOpen()){
-        await sleep(1000);
+        await sleep(500);
     }
     searchSeat(); // 启动爬虫
     // selectRange(1);
@@ -616,9 +611,9 @@ async function lockSeat() {
                 await sendSeatLockRequest(seat.block,seat.id,true)
             }
             popSeatFromQueue();
-            await sleep(1000)
+            await sleep(500)
         }else{
-            await sleep(10);
+            await sleep(50);
         }
     }
     // 接口锁成功的处理一下选座
