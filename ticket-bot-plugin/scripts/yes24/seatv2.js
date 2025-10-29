@@ -1,8 +1,8 @@
 /*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
 let USERID = ''; // 用户id 抓包自己看
 let MAX_SEAT_ID = 999; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
-let SINGLE_REQUEST_INTERVAL = 100; // 单个页面请求间隔时间
-let REFRESH_INTERVAL = 800; // 一组页面请求间隔时间
+let SINGLE_REQUEST_INTERVAL = 600; // 单个页面请求间隔时间
+let REFRESH_INTERVAL = 600; // 一组页面请求间隔时间
 
 
 /*--------------------------------- 勿修改 ---------------------------------*/
@@ -60,7 +60,7 @@ function assertSeatPageOpen() {
     if (!frame) {
         return false;
     }
-    let seatArray = frame.getElementById("divSeatArray").children;
+    let seatArray = frame.getElementById("SeatFlashArea").children;
     if (seatArray && seatArray.length > 0) {
         console.log('✅ 选座页面打开');
         return true;
@@ -202,8 +202,11 @@ function selectRange(idx) {
     if (idx == 1) {
         // 看台页面
         if (frame.getElementById("grade_지정석")) {
-            frame.getElementById("grade_지정석").click()
-            currentSeatLayer = 1;
+            let gradeElement = frame.getElementById("grade_지정석");
+            // 检查元素是否存在，并且其 class 列表中不包含 'ov'
+            if (gradeElement && !gradeElement.classList.contains("ov")) {
+                gradeElement.click();
+            }
         }
     } else {
         // 内场页面
@@ -222,7 +225,7 @@ async function enterPage(block) {
     if (!seatLayer || seatLayer.length === 0) {
         // 如果block为1开头为内场 打开内场page
         if (block.toString().startsWith("1")) {
-            selectRange(2);
+            selectRange(1);
             await sleep(300);
         }
         else {
@@ -599,11 +602,12 @@ async function lockSeat() {
         sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]日期选择失败 请手动选择日期`);
         console.log('❌ 日期选择失败 请手动选择日期');
     }
-    while(!assertSeatPageOpen()){
-        await sleep(500);
-    }
+    // while(!assertSeatPageOpen()){
+    //     await sleep(500);
+    // }
+    await sleep(3000);
     searchSeat(); // 启动爬虫
-    // selectRange(1);
+    selectRange(1);
     while (!isSuccess) {
         if (seatQueue.length > 0) {
             let seat = getSeatFromQueue();
@@ -1375,7 +1379,8 @@ function testParseResponse(){
     &lt;DIV class=s13 id=t2600203 style="LEFT: 136px; TOP: 309px" name="tk" value="2600203"&gt;&lt;/DIV&gt;
     &lt;DIV class=s13 id=t2600204 style="LEFT: 147px; TOP: 309px" name="tk" value="2600204"&gt;&lt;/DIV&gt;
     &lt;DIV class=s13 id=t2600205 style="LEFT: 158px; TOP: 309px" name="tk" value="2600205"&gt;&lt;/DIV&gt;
-    &lt;DIV class=s13 id=t2600206 style="LEFT: 169px; TOP: 309px" name="tk" value="2600206"&gt;&lt;/DIV&gt;</Layout>
+    &lt;DIV class=s13 id=t2600206 style="LEFT: 169px; TOP: 309px" name="tk" value="2600206"&gt;&lt;/DIV&gt;
+    </Layout>
     <Background>13219b_101_1011.jpg@0@0</Background>
     <BlockSeat>2400199@13@7@Floor층 S1구역 스탠딩643번@154,000 WON@스탠딩@Floor S1 Area Standing643 Col@Standing^</BlockSeat>
     <BlockRemain>101@0^102@0^103@0^104@0^105@0^106@0^301@0^302@0^303@0^304@0^305@0^306@0^307@0^308@0^309@0^310@0^311@0^312@0^313@0^314@0^315@0^316@0^317@0^318@0^319@0^320@0^401@0^402@0^403@0^412@0^413@0^414@0^415@0^416@0^417@0^418@0^419@0^420@0^</BlockRemain>
