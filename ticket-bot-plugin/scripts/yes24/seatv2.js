@@ -2,7 +2,7 @@
 let USERID = ''; // 用户id 抓包自己看
 let MAX_SEAT_ID = 999; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
 let SINGLE_REQUEST_INTERVAL = 600; // 单个页面请求间隔时间
-let REFRESH_INTERVAL = 600; // 一组页面请求间隔时间
+// let REFRESH_INTERVAL = 600; // 一组页面请求间隔时间
 
 
 /*--------------------------------- 勿修改 ---------------------------------*/
@@ -555,7 +555,7 @@ function parseResponse(xmlString) {
 async function searchSeat() {
     getUserInfo();
     let i = 0;
-    let requestCount = 0;
+    // let requestCount = 0;
     await sleep(1000);
     // 一直循环遍历blockSelect
     while (!isSuccess) {
@@ -569,12 +569,12 @@ async function searchSeat() {
         // 一直循环遍历blockSelect
         sendSearchSeatRequest(blockSelect[i]);
         i = (i + 1) % blockSelect.length;
-        requestCount++;
-        await sleep(SINGLE_REQUEST_INTERVAL);
-        if (requestCount % 8 === 0) {
-            requestCount = 0;
-            await sleep(REFRESH_INTERVAL);
-        }
+        // requestCount++;
+        await sleep(SINGLE_REQUEST_INTERVAL + Math.random() * 50 + 50);
+        // if (requestCount % 8 === 0) {
+        //     requestCount = 0;
+        //     await sleep(REFRESH_INTERVAL + Math.random() * 50 + 50);
+        // }
     }
 }
 
