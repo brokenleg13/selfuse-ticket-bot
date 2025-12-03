@@ -8,9 +8,19 @@
         "activeTab",
         "declarativeNetRequest"
     ],
+    "declarative_net_request": {
+        "rule_resources": [
+            {
+                "id": "ruleset_yes24",
+                "enabled": true,
+                "path": "rules.json"
+            }
+        ]
+    },
     "host_permissions": [
         "https://booking.thaiticketmajor.com/*",
-        "https://ticket.yes24.com/*"
+        "https://ticket.yes24.com/*",
+        "https://cdn-botmanager.stclab.com/*"
     ],
     "background": {
         "service_worker": "background.js"
@@ -18,7 +28,8 @@
     "web_accessible_resources": [
         {
             "resources": [
-                "inject.js"
+                "inject.js",
+                "scripts/yes24/antibot.js"
             ],
             "matches": [
                 "<all_urls>"

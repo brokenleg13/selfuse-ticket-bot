@@ -1,0 +1,16 @@
+[
+    {
+        "id": 1,
+        "priority": 1,
+        "action": {
+            "type": "redirect",
+            "redirect": {
+                "extensionPath": "/scripts/yes24/antibot.js"
+            }
+        },
+        "condition": {
+            "urlFilter": "botmanager-browser-agent.js",
+            "resourceTypes": ["script"]
+        }
+    }
+]
