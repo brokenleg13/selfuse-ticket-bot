@@ -2,6 +2,7 @@
 let USERID = ''; // 用户id 抓包自己看
 let MAX_SEAT_ID = 999; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
 let SINGLE_REQUEST_INTERVAL = 600; // 单个页面请求间隔时间
+let BAN_DURATION = 5 * 60 * 1000; // 黑名单封禁时间 (默认5分钟)
 // let REFRESH_INTERVAL = 600; // 一组页面请求间隔时间
 
 
@@ -10,12 +11,18 @@ let isSuccess = false; // 是否成功
 let currentSeatLayer = null;
 let blackList = [];
 let concertcfg = {};// 存储当前页面的concertcfg
+let concertId = "";
 concertcfg.idCustomer = USERID // idCustomer
 let successBlock = "";
 let successId = "";
 let sendedIdList = [];
 let WEBHOOK_URL = '';
 let blockSelect = []; // 自定义选区
+
+let seatFailureMap = {}; // 记录 { seatId: failureCount }
+let seatBlacklist = {}; // 记录 { seatId: unbanTime }
+const MAX_FAILURES = 3;
+let needDelay = false;
 
 // region 队列
 let seatQueue = [];// 可选座位队列
@@ -75,7 +82,7 @@ async function selectDate(data) {
     if (!data || !data.date || !data.time) {
         return false;
     }
-    while(!assertDatePageOpen()){
+    while (!assertDatePageOpen()) {
         await sleep(1000);
     }
     let date = data.date;
@@ -267,7 +274,7 @@ async function enterPage(block) {
 }
 
 // 接口锁定后 选择座位 去支付
-async function chooseSeatAndGotoPayment(block,seatId) {
+async function chooseSeatAndGotoPayment(block, seatId) {
     await enterPage(block);
     await sleep(400);
     let frame = theFrame();
@@ -279,8 +286,8 @@ async function chooseSeatAndGotoPayment(block,seatId) {
         }
         await sleep(500);
         // while(!assertLockSuccess()){
-            TampermonkeyClick();
-            await sleep(1000);
+        TampermonkeyClick();
+        await sleep(1000);
         // }
     }
 }
@@ -307,6 +314,24 @@ async function sendSearchSeatRequest(block) {
     console.log(`[DEBUG] Cookie长度: ${cookie ? cookie.length : 0}`);
     console.log(`[DEBUG] URL: ${url}`);
 
+    const targetUrl = url;
+    const refererUrl = `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`
+
+    // Add the rule before sending the request
+    await new Promise(resolve => {
+        chrome.runtime.sendMessage({
+            action: 'addRefererRule',
+            data: { targetUrl: targetUrl, refererUrl: refererUrl }
+        }, response => {
+            if (response && response.success) {
+                console.log('[YES24] GetBookWholeFN request rule added, proceeding with fetch. refererUrl: ${refererUrl}');
+            } else {
+                console.error('[YES24] Failed to add GetBookWholeFN request rule: refererUrl: ${refererUrl}', response ? response.error : 'No response');
+            }
+            resolve();
+        });
+    });
+
     const body = new URLSearchParams({
         idHall: concertcfg.idHall,
         idTime: concertcfg.idTime,
@@ -327,7 +352,6 @@ async function sendSearchSeatRequest(block) {
         'Accept': 'application/xml, text/xml, */*; q=0.01',
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
         'Origin': 'https://ticket.yes24.com',
-        'Referer': `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`,
         'Accept-Encoding': 'gzip, deflate',
         'Accept-Language': 'zh-CN,zh;q=0.9',
         'Cookie': cookie
@@ -335,34 +359,34 @@ async function sendSearchSeatRequest(block) {
 
     console.log(`[DEBUG] 准备发送fetch请求...`);
 
-    // 发送请求
-    fetch(url, {
+    try {
+        const response = await fetch(url, {
             method: 'POST',
             headers: headers,
-            body: body,
-            credentials: 'include',
-    })
-        .then(response => response.text())
-        .then(data => {
-        console.log(`[DEBUG] 响应数据长度:`, data.length);
-            parseResponse(data);
-        console.log(`[YES24 info] Block ${block} 请求成功`);
-        })
-        .catch(err => {
-        console.error(`[YES24 Error] Block ${block} 请求失败:`, err.message);
-        console.error(`[DEBUG] 错误详情:`, err);
-        // 如果是超时或网络错误，可以考虑重试
-        if (err.message.includes('超时') || err.message.includes('Failed to fetch')) {
-            console.log(`[YES24 info] Block ${block} 将在下次循环中重试`);
-        }
+            body: body
         });
+        const data = await response.text();
+        console.log(`[DEBUG] 响应数据长度:`, data.length);
+        parseResponse(data);
+        console.log(`[YES24 info] Block ${block} 请求成功`);
+    } catch (error) {
+        console.error(`[YES24 Error] Block ${block} 请求失败:`, error);
+    } finally {
+        chrome.runtime.sendMessage({ action: 'removeRefererRule' }, response => {
+            if (response && response.success) {
+                console.log('[YES24] GetBookWholeFN request rule removed successfully. refererUrl: ${refererUrl}');
+            } else {
+                console.error('[YES24] Failed to remove GetBookWholeFN request rule: refererUrl: ${refererUrl}', response ? response.error : 'No response');
+            }
+        });
+    }
 }
 
-async function sendSeatLockRequest(block,seatId,sendmsg=false) {
+async function sendSeatLockRequest(block, seatId, sendmsg = false) {
     if (isSuccess) {
         return;
     }
-    
+
     console.log(`[DEBUG] 开始发送Lock请求，区块: ${block} 座位ID: ${seatId}`);
 
     const url = 'https://ticket.yes24.com/OSIF/Book.asmx/Lock';
@@ -374,13 +398,31 @@ async function sendSeatLockRequest(block,seatId,sendmsg=false) {
     const body = new URLSearchParams({
         name: concertcfg.idCustomer,
         idTime: concertcfg.idTime,
-        token:seatId,
+        token: seatId,
         block: block,
         channel: '1024',
         organizationID: '1'
     });
 
     console.log(`[DEBUG] 请求体:`, body.toString());
+
+    const targetUrl = url;
+    const refererUrl = `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`
+
+    // Add the rule before sending the request
+    await new Promise(resolve => {
+        chrome.runtime.sendMessage({
+            action: 'addRefererRule',
+            data: { targetUrl: targetUrl, refererUrl: refererUrl }
+        }, response => {
+            if (response && response.success) {
+                console.log('[YES24] Lock request rule added, proceeding with fetch. refererUrl: ${refererUrl}');
+            } else {
+                console.error('[YES24] Failed to add Lock request rule: refererUrl: ${refererUrl}', response ? response.error : 'No response');
+            }
+            resolve();
+        });
+    });
 
     const headers = {
         'Host': 'ticket.yes24.com',
@@ -399,78 +441,90 @@ async function sendSeatLockRequest(block,seatId,sendmsg=false) {
 
     console.log(`[DEBUG] 准备发送fetch请求...`);
 
-    // 发送请求
-    fetch(url, {
+    try {
+        // 发送请求
+        const response = await fetch(url, {
             method: 'POST',
             headers: headers,
             body: body,
             credentials: 'include',
-    })
-        .then(response => response.text())
-        .then(data => {
+        });
+        const data = await response.text();
         console.log(`[DEBUG] Lock响应数据:`, data);
-        
-        // 解析XML响应
+
         const codeMatch = data.match(/<Code>(.*?)<\/Code>/);
         const messageMatch = data.match(/<Message>(.*?)<\/Message>/);
-        
-        if (codeMatch) {
-            const code = codeMatch[1];
-            const message = messageMatch ? messageMatch[1] : '';
-            
-            console.log(`[DEBUG] 响应Code: ${code}, Message: ${message}`);
-            // sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位接口锁定响应: block:${block} seat:${seatId} Code:${code} Message:${message}`);
-            
-            if (code === 'None') {
-                isSuccess = true; // 设置成功标志
-                successBlock = block;
-                successId = seatId;
-                console.log(`[YES24 Success] 座位锁定成功: ${seatId}`);
-                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位接口锁定成功: block:${block} seat:${seatId}`);
-            } else if (code === 'block') {
-                console.error(`[YES24 Error] 被block 需要验证码`);
-                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]被block: block:${block} seat:${seatId}`);
-            } else {
-                console.error(`[YES24 Error] 锁定失败: Code=${code}, Message=${message}`);
-                if (sendmsg) {
-                    sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]锁定失败: block:${block} seat:${seatId} Code=${code} Message=${message}`);
-                }
-            }
+        const code = codeMatch ? codeMatch[1] : '';
+        const message = messageMatch ? messageMatch[1] : '';
+        console.log(`[DEBUG] Lock响应数据 code: ${code}, message: ${message}`);
+        if (code === 'None') {
+            isSuccess = true; // 设置成功标志
+            successBlock = block;
+            successId = seatId;
+            console.log(`[YES24 Success] 座位锁定成功: ${seatId}`);
+            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位接口锁定成功: block:${block} seat:${seatId}`);
+        } else if (code === 'block') {
+            console.error(`[YES24 Error] 被block 需要验证码`);
+            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]被block: block:${block} seat:${seatId}`);
+            isSuccess = true;
         } else {
-            console.error(`[YES24 Error] 无法解析响应:`, data);
+            console.error(`[YES24 Error] 锁定失败: Code=${code}, Message=${message}`);
+
+            if (!seatFailureMap[seatId]) {
+                seatFailureMap[seatId] = 0;
+            }
+            seatFailureMap[seatId]++;
+
+            if (seatFailureMap[seatId] >= MAX_FAILURES) {
+                const unbanTime = Date.now() + BAN_DURATION;
+                seatBlacklist[seatId] = unbanTime;
+                console.warn(`[Blacklist] Seat ${seatId} failed ${seatFailureMap[seatId]} times. Banned for ${BAN_DURATION} ms.`);
+                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Seat ${seatId} 加入黑名单 (${BAN_DURATION/(1000*60)} 分钟). 失败次数: ${seatFailureMap[seatId]}`);
+            }
+
+            if (sendmsg) {
+                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]锁定失败: block:${block} seat:${seatId} Code=${code} Message=${message}`);
+            }
         }
-        })
-        .catch(err => {
-        console.error(`[YES24 Error] Lock请求失败:`, err.message);
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]Lock请求失败: block:${block} seat:${seatId} Error=${err.message}`);
-        })
+    } catch (error) {
+        console.error(`[YES24 Error] Lock请求失败:`, error);
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]Lock请求失败: block:${block} seat:${seatId} Error=${error.message}`);
+    } finally {
+        chrome.runtime.sendMessage({ action: 'removeRefererRule' }, response => {
+            if (response && response.success) {
+                console.log('[YES24] Lock request rule removed successfully. refererUrl: ${refererUrl}');
+            } else {
+                console.error('[YES24] Failed to remove Lock request rule: refererUrl: ${refererUrl}', response ? response.error : 'No response');
+            }
+        });
+    }
 }
 
 function parseLayoutData(xmlString) {
     // 解析Layout数据，提取座位信息
     console.log(`[DEBUG] 开始解析Layout数据...`);
-    
+
     // 获取Layout内容
     const layoutMatch = xmlString.match(/<Layout>(.*?)<\/Layout>/s);
     const layoutData = layoutMatch ? layoutMatch[1] : "";
-    
+
     let layoutSortById = {}; // 存储座位ID和递增序号的对应关系
-    
+
     if (layoutData) {
-        
+
         // 使用正则表达式匹配所有DIV元素
         const divRegex = /&lt;DIV[^&]*?&gt;&lt;\/DIV&gt;/g;
         const divMatches = layoutData.match(divRegex);
-        
+
         if (divMatches) {
             let sortIndex = 1; // 递增序号从1开始
-            
+
             divMatches.forEach(divHtml => {
                 // 解析每个DIV的属性
                 const idMatch = divHtml.match(/id=([^&\s]+)/);
                 const styleMatch = divHtml.match(/style="([^"]+)"/);
                 const valueMatch = divHtml.match(/value="([^"]+)"/);
-                
+
                 if (idMatch && valueMatch) {
                     let seatId = idMatch[1];
                     // 存储到layoutSortById对象中，key为座位ID，value为递增序号
@@ -478,11 +532,11 @@ function parseLayoutData(xmlString) {
                     sortIndex++; // 递增序号
                 }
             });
-            
+
             console.log(`[DEBUG] layoutSortById对象:`, layoutSortById);
         }
     }
-    
+
     return layoutSortById; // 添加return语句
 }
 
@@ -496,7 +550,23 @@ function parseResponse(xmlString) {
 
     // 获取 Block 值
     const blockMatch = xmlString.match(/<Block>(.*?)<\/Block>/);
-    const block = blockMatch ? blockMatch[1] : null;
+    const blockValue = blockMatch ? blockMatch[1] : null;
+
+    if (blockValue === '-1') {
+        const delay = Math.floor(Math.random() * 2000) + 1000; // 1000-3000ms
+        console.warn(`[YES24 Warning] Block返回-1 (频率过快)，暂停 ${delay}ms 防止封禁...`);
+        needDelay = true;
+        return;
+    }
+
+    if (blockValue === 'deny') {
+        console.error('[YES24 Error]检测到Block值为deny，可能已被封禁！停止刷票。');
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]已被封禁 (Block=deny)，停止刷票！`);
+        isSuccess = true; // 设置成功标志以停止循环（虽然是失败情况，但目的是停下来）
+        return;
+    }
+    
+    const block = blockValue; // 继续使用 block 变量名以保持后续代码兼容
 
 
     // 获取 BlockSeat 内容
@@ -513,13 +583,24 @@ function parseResponse(xmlString) {
                 const seatInfo = seatData.split('@');
                 if (seatInfo.length > 0) {
                     const seatId = seatInfo[0];
+                    
+                    // Check blacklist
+                    if (seatBlacklist[seatId]) {
+                        if (Date.now() < seatBlacklist[seatId]) {
+                            return; 
+                        } else {
+                            delete seatBlacklist[seatId]; 
+                            delete seatFailureMap[seatId]; 
+                        }
+                    }
+
                     let chooseable = seatInfo[2];
                     let seat = {};
                     seat.id = seatId;
                     seat.block = block;
-                    
-                    let seatElementIdx = layoutSortById["t"+seatId];
-                    if (!sendedIdList[seatId]){
+
+                    let seatElementIdx = layoutSortById["t" + seatId];
+                    if (!sendedIdList[seatId]) {
                         if (seatQueue.length > 2) {
                             return;
                         }
@@ -531,7 +612,7 @@ function parseResponse(xmlString) {
                     //     // sendFeiShuMsg(WEBHOOK_URL, `站票超过ID最大值，不锁票 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
                     //     return;
                     // }
-                    
+
                     if (!isSuccess) {
                         if (chooseable == "0") {
                             if (seatQueue.length > 2) {
@@ -539,7 +620,7 @@ function parseResponse(xmlString) {
                             }
                             console.log(`[YES24 info] chooseable==0 发现空座，直接接口锁定: block:${block} seat:${seatId},index:${seatElementIdx},seatInfo:${seatInfo}`);
                             addSeatToQueue(seat);
-                            sendFeiShuMsg(WEBHOOK_URL,`[${new Date().toLocaleString()}]刷到空座，直接接口锁定 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
+                            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]刷到空座，直接接口锁定 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
                         }
                     }
                 }
@@ -550,12 +631,60 @@ function parseResponse(xmlString) {
 // endregion
 
 
+// 独立的异步任务：模拟用户随机行为
+async function startAntiBanSimulation() {
+    console.log('[Anti-Ban] 启动随机行为模拟协程');
+    while (!isSuccess) {
+        // 随机等待 2-10 秒执行一次动作，避免过于频繁
+        const waitTime = Math.floor(Math.random() * 4000) + 2000;
+        await sleep(waitTime);
+
+        if (isSuccess) break;
+
+        const actionType = Math.floor(Math.random() * 3);
+        if (actionType === 0) {
+            // 模拟鼠标移动
+            console.log('[Anti-Ban] 模拟鼠标移动');
+            const x = Math.floor(Math.random() * window.innerWidth);
+            const y = Math.floor(Math.random() * window.innerHeight);
+            const event = new MouseEvent('mousemove', {
+                view: window,
+                bubbles: true,
+                cancelable: true,
+                clientX: x,
+                clientY: y
+            });
+            document.dispatchEvent(event);
+        } else if (actionType === 1) {
+            // 模拟点击空白处
+            console.log('[Anti-Ban] 模拟点击空白处');
+            const x = Math.floor(Math.random() * window.innerWidth);
+            const y = Math.floor(Math.random() * window.innerHeight);
+            const event = new MouseEvent('click', {
+                view: window,
+                bubbles: true,
+                cancelable: true,
+                clientX: x,
+                clientY: y
+            });
+            document.body.dispatchEvent(event);
+        } else {
+            // 模拟页面滚动
+            console.log('[Anti-Ban] 模拟页面滚动');
+            const scrollAmount = Math.floor(Math.random() * 200) - 100; // 向上或向下滚动
+            window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
+        }
+    }
+    console.log('[Anti-Ban] 停止随机行为模拟');
+}
+
 //region 主流程
 // producer：搜索可用座位添加到列表
 async function searchSeat() {
     getUserInfo();
+
     let i = 0;
-    // let requestCount = 0;
+    let loopCount = 0;
     await sleep(1000);
     // 一直循环遍历blockSelect
     while (!isSuccess) {
@@ -566,21 +695,29 @@ async function searchSeat() {
         if (isSuccess) {
             break;
         }
+
         // 一直循环遍历blockSelect
         sendSearchSeatRequest(blockSelect[i]);
         i = (i + 1) % blockSelect.length;
-        // requestCount++;
-        await sleep(SINGLE_REQUEST_INTERVAL + Math.random() * 50 + 50);
-        // if (requestCount % 8 === 0) {
-        //     requestCount = 0;
-        //     await sleep(REFRESH_INTERVAL + Math.random() * 50 + 50);
-        // }
+
+        // 基础随机延时：在 SINGLE_REQUEST_INTERVAL 基础上增加 50-150ms 的波动
+        let randomDelay = Math.floor(Math.random() * 100) + 50;
+        await sleep(SINGLE_REQUEST_INTERVAL + randomDelay);
+
+        loopCount++;
+        // 每 15-30 次请求，进行一次较长时间的“休息”（1-3秒），模拟人类行为
+        if (loopCount % (Math.floor(Math.random() * 15) + 15) === 0 || needDelay) {
+            needDelay = false;
+            let longRest = Math.floor(Math.random() * 2000) + 1000;
+            console.log(`[Anti-Ban] 模拟用户休息，暂停 ${longRest}ms`);
+            await sleep(longRest);
+        }
     }
 }
 
 // consumer：从列表中获取座位并尝试锁定
-async function lockSeat() {
-    let concertId = getConcertId();
+async function main() {
+    concertId = getConcertId();
     let data = await get_stored_value(concertId);
     if (!data) {
         sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]获取演出信息失败`);
@@ -608,43 +745,47 @@ async function lockSeat() {
     await sleep(3000);
     searchSeat(); // 启动爬虫
     selectRange(1);
+    // 启动并行的随机行为模拟任务（不await，让它在后台跑）
+    startAntiBanSimulation();
     while (!isSuccess) {
         if (seatQueue.length > 0) {
             let seat = getSeatFromQueue();
             if (seat) {
-                await sendSeatLockRequest(seat.block,seat.id,true)
+                await sendSeatLockRequest(seat.block, seat.id, true)
             }
             popSeatFromQueue();
             await sleep(500)
-        }else{
+        } else {
             await sleep(50);
         }
     }
     // 接口锁成功的处理一下选座
-    sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]抢票成功 successBlock:${successBlock} successId:${successId}`);
-    await chooseSeatAndGotoPayment(successBlock,successId);
-    await sleep(1000);
-    clickStepCtrlBtn03();
-    await sleep(2000);
-    clickStepCtrlBtn04();
-    await sleep(1000);
-    // openPayment();
+    if (successBlock && successId) {
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]抢票成功 successBlock:${successBlock} successId:${successId}`);
+        await chooseSeatAndGotoPayment(successBlock, successId);
+        await sleep(1000);
+        clickStepCtrlBtn03();
+        await sleep(2000);
+        clickStepCtrlBtn04();
+        await sleep(1000);
+        openPayment();
+    }
 }
 
-lockSeat();
+main();
 
 // endregion
 
 
 // region 测试
-function testAddSeatToQueue(block,seatId){
+function testAddSeatToQueue(block, seatId) {
     let seat = {};
     seat.id = seatId;
     seat.block = block;
-    addSeatToQueue(seat);   
+    addSeatToQueue(seat);
 }
 
-function testParseResponse(){
+function testParseResponse() {
     let xmlString = `
     <?xml version="1.0" encoding="utf-8"?>
     <BookWhole xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns="http://tempuri.org/">

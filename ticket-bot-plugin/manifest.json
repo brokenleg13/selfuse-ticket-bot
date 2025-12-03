@@ -9,7 +9,8 @@
         "declarativeNetRequest"
     ],
     "host_permissions": [
-        "https://booking.thaiticketmajor.com/*"
+        "https://booking.thaiticketmajor.com/*",
+        "https://ticket.yes24.com/*"
     ],
     "background": {
         "service_worker": "background.js"
