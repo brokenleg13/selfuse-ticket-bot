@@ -3781,14 +3781,16 @@
             }
         }
           , C = function(t) {
-            window.top && window.top !== window.self ? window.top.location.href = t.toString() : window.location.href = t.toString()
+            // window.top && window.top !== window.self ? window.top.location.href = t.toString() : window.location.href = t.toString()
+            console.log("拦截到重定向请求:", t);
         };
         function A(t) {
             if (t)
                 try {
                     var e = new URL(t);
                     e.searchParams.append("redirectUrl", window.location.href),
-                    window.top && window.top !== window.self ? window.top.location.href = e.toString() : window.location.href = e.toString()
+                    // window.top && window.top !== window.self ? window.top.location.href = e.toString() : window.location.href = e.toString()
+                    console.log("拦截到重定向请求 (A):", e.toString());
                 } catch (t) {
                     console.error("Unable to redirect using top. Falling back to current window redirect.", t)
                 }
@@ -3817,6 +3819,7 @@
             }
         }
         function M(t, e, n) {
+            return;
             if (!$t.getRedirectingStatus()) {
                 var r = e.detectionType
                   , o = e.blockType;

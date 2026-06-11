@@ -6,6 +6,7 @@
     "permissions": [
         "storage",
         "activeTab",
+        "scripting",
         "declarativeNetRequest"
     ],
     "declarative_net_request": {
@@ -20,7 +21,11 @@
     "host_permissions": [
         "https://booking.thaiticketmajor.com/*",
         "https://ticket.yes24.com/*",
-        "https://cdn-botmanager.stclab.com/*"
+        "https://cdn-botmanager.stclab.com/*",
+        "https://world.nol.com/*",
+        "https://gpoticket.globalinterpark.com/*",
+        "http://127.0.0.1/*",
+        "http://localhost/*"
     ],
     "background": {
         "service_worker": "background.js"
@@ -28,7 +33,6 @@
     "web_accessible_resources": [
         {
             "resources": [
-                "inject.js",
                 "scripts/yes24/antibot.js"
             ],
             "matches": [
@@ -43,6 +47,7 @@
                 "https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleProcess.aspx*"
             ],
             "js": [
+                "config/config.js",
                 "scripts/common/feishubot.js",
                 "scripts/common/hourToPm.js",
                 "scripts/common/storage.js",
@@ -56,6 +61,7 @@
                 "https://tkglobal.melon.com/reservation/popup/onestop.htm"
             ],
             "js": [
+                "config/config.js",
                 "scripts/common/feishubot.js",
                 "scripts/common/storage.js",
                 "scripts/common/sleep.js",
@@ -69,6 +75,7 @@
                 "https://tkglobal.melon.com/performance/index.htm"
             ],
             "js": [
+                "config/config.js",
                 "scripts/common/hourToPm.js",
                 "scripts/common/storage.js",
                 "scripts/common/sleep.js",
@@ -82,12 +89,30 @@
                 "https://booking.thaiticketmajor.com/booking/3m/zones.php*"
             ],
             "js": [
+                "config/config.js",
                 "scripts/common/feishubot.js",
                 "scripts/common/hourToPm.js",
                 "scripts/common/storage.js",
                 "scripts/common/sleep.js",
                 "scripts/thaiticket/concert.js",
                 "scripts/thaiticket/seatv2.js"
+            ],
+            "run_at": "document_end"
+        },
+        {
+            "matches": [
+                "https://world.nol.com/*/ticket/places/*/products/*",
+                "https://world.nol.com/*/ticket/genre/*/products/*",
+                "https://world.nol.com/ticket/places/*/products/*",
+                "https://world.nol.com/ticket/genre/*/products/*",
+                "https://gpoticket.globalinterpark.com/Global/Play/Book/BookMain.asp*"
+            ],
+            "js": [
+                "config/config.js",
+                "scripts/common/feishubot.js",
+                "scripts/common/storage.js",
+                "scripts/common/sleep.js",
+                "scripts/interpark/seat.js"
             ],
             "run_at": "document_end"
         }

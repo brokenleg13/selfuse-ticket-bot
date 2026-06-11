@@ -1,7 +1,7 @@
 /*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
-let USERID = ''; // 用户id 抓包自己看
+let USERID = ''; // 用户 id，可在 YES24 配置页填写“YES24 用户 ID”
 let MAX_SEAT_ID = 999; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
-let SINGLE_REQUEST_INTERVAL = 600; // 单个页面请求间隔时间
+let SINGLE_REQUEST_INTERVAL = 100; // 单个页面请求间隔时间
 let BAN_DURATION = 5 * 60 * 1000; // 黑名单封禁时间 (默认5分钟)
 // let REFRESH_INTERVAL = 600; // 一组页面请求间隔时间
 
@@ -23,6 +23,7 @@ let seatFailureMap = {}; // 记录 { seatId: failureCount }
 let seatBlacklist = {}; // 记录 { seatId: unbanTime }
 const MAX_FAILURES = 3;
 let needDelay = false;
+let botRunning = false;
 
 // region 队列
 let seatQueue = [];// 可选座位队列
@@ -634,12 +635,12 @@ function parseResponse(xmlString) {
 // 独立的异步任务：模拟用户随机行为
 async function startAntiBanSimulation() {
     console.log('[Anti-Ban] 启动随机行为模拟协程');
-    while (!isSuccess) {
+    while (botRunning && !isSuccess) {
         // 随机等待 2-10 秒执行一次动作，避免过于频繁
         const waitTime = Math.floor(Math.random() * 4000) + 2000;
         await sleep(waitTime);
 
-        if (isSuccess) break;
+        if (!botRunning || isSuccess) break;
 
         const actionType = Math.floor(Math.random() * 3);
         if (actionType === 0) {
@@ -687,12 +688,12 @@ async function searchSeat() {
     let loopCount = 0;
     await sleep(1000);
     // 一直循环遍历blockSelect
-    while (!isSuccess) {
+    while (botRunning && !isSuccess) {
         if (seatQueue.length > 0) {
             await sleep(50);
             continue;
         }
-        if (isSuccess) {
+        if (!botRunning || isSuccess) {
             break;
         }
 
@@ -701,7 +702,7 @@ async function searchSeat() {
         i = (i + 1) % blockSelect.length;
 
         // 基础随机延时：在 SINGLE_REQUEST_INTERVAL 基础上增加 50-150ms 的波动
-        let randomDelay = Math.floor(Math.random() * 100) + 50;
+        let randomDelay = Math.floor(Math.random() * 300) + 50;
         await sleep(SINGLE_REQUEST_INTERVAL + randomDelay);
 
         loopCount++;
@@ -716,18 +717,41 @@ async function searchSeat() {
 }
 
 // consumer：从列表中获取座位并尝试锁定
-async function main() {
+function resetRuntimeState() {
+    isSuccess = false;
+    currentSeatLayer = null;
+    blackList = [];
+    concertcfg = {};
+    concertcfg.idCustomer = USERID;
+    successBlock = "";
+    successId = "";
+    sendedIdList = [];
+    WEBHOOK_URL = '';
+    blockSelect = [];
+    seatFailureMap = {};
+    seatBlacklist = {};
+    needDelay = false;
+    seatQueue = [];
+}
+
+async function main(startConfig) {
     concertId = getConcertId();
-    let data = await get_stored_value(concertId);
+    let data = startConfig || await get_stored_value(concertId);
     if (!data) {
         sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]获取演出信息失败`);
         console.log('❌ 获取演出信息失败');
         return;
     }
     WEBHOOK_URL = data["feishu-bot-id"];
+    USERID = data["customer-id"] || USERID;
+    concertcfg.idCustomer = USERID;
     blockSelect = data.section
-    console.log(WEBHOOK_URL)
     console.log(blockSelect);
+    if (!concertcfg.idCustomer) {
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]YES24 用户 ID 为空，请先在 YES24 配置页填写`);
+        console.log('❌ YES24 用户 ID 为空，请先在 YES24 配置页填写');
+        return;
+    }
     if (blockSelect.length == 0) {
         sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位区域为空，请配置座位区域`);
         console.log('❌ 座位区域为空，请配置座位区域');
@@ -735,6 +759,9 @@ async function main() {
     }
     await sleep(3000);
     var hasDate = await selectDate(data);
+    if (!botRunning) {
+        return;
+    }
     if (!hasDate) {
         sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]日期选择失败 请手动选择日期`);
         console.log('❌ 日期选择失败 请手动选择日期');
@@ -747,7 +774,7 @@ async function main() {
     selectRange(1);
     // 启动并行的随机行为模拟任务（不await，让它在后台跑）
     startAntiBanSimulation();
-    while (!isSuccess) {
+    while (botRunning && !isSuccess) {
         if (seatQueue.length > 0) {
             let seat = getSeatFromQueue();
             if (seat) {
@@ -772,7 +799,70 @@ async function main() {
     }
 }
 
-main();
+async function startBot(config) {
+    if (botRunning) {
+        return;
+    }
+
+    resetRuntimeState();
+    botRunning = true;
+    await main(config);
+    botRunning = false;
+    markRunStateStopped();
+}
+
+function stopBot() {
+    botRunning = false;
+    isSuccess = true;
+    markRunStateStopped();
+    console.log('[YES24] Ticket bot stopped.');
+}
+
+function markRunStateStopped() {
+    const storageKeys = window.TicketBotConfig && window.TicketBotConfig.storageKeys;
+    const runStateKey = storageKeys ? storageKeys.botRunState : 'ticketBotRunState';
+    store_value(runStateKey, {
+        running: false,
+        platform: 'yes24',
+        concertId,
+    });
+}
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    const actions = window.TicketBotConfig && window.TicketBotConfig.actions;
+    const startAction = actions ? actions.startBot : 'startTicketBot';
+    const stopAction = actions ? actions.stopBot : 'stopTicketBot';
+
+    if (request.action === startAction && (!request.platform || request.platform === 'yes24')) {
+        startBot(request.config);
+        sendResponse({ status: 'started' });
+        return true;
+    }
+
+    if (request.action === stopAction && (!request.platform || request.platform === 'yes24')) {
+        stopBot();
+        sendResponse({ status: 'stopped' });
+        return true;
+    }
+});
+
+async function startFromRunState() {
+    const storageKeys = window.TicketBotConfig && window.TicketBotConfig.storageKeys;
+    const runStateKey = storageKeys ? storageKeys.botRunState : 'ticketBotRunState';
+    const runState = await get_stored_value(runStateKey);
+    if (!runState || !runState.running || runState.platform !== 'yes24') {
+        return;
+    }
+
+    const currentConcertId = getConcertId();
+    if (runState.concertId && currentConcertId && runState.concertId !== currentConcertId) {
+        return;
+    }
+
+    startBot(runState.config);
+}
+
+startFromRunState();
 
 // endregion
 

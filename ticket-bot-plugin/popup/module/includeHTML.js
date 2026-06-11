@@ -19,6 +19,7 @@ function includeHTML() {
             return;
         }
     }
-};
+    document.dispatchEvent(new CustomEvent("include-html-loaded"));
+}
 
-includeHTML()
+includeHTML();

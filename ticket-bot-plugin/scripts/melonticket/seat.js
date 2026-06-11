@@ -1,4 +1,5 @@
 window.isSuccess = false; // 是否成功
+let botRunning = false;
 
 async function sleep(t) {
     return await new Promise(resolve => setTimeout(resolve, t));
@@ -77,7 +78,14 @@ async function checkCaptchaFinish() {
 }
 
 async function searchSeat(data) {
-    for (sec of data.section) {
+    if (!botRunning || window.isSuccess) {
+        return;
+    }
+
+    for (const sec of data.section) {
+        if (!botRunning || window.isSuccess) {
+            return;
+        }
         openRangeList();
         clickOnArea(sec);
         if (await findSeat()) {
@@ -92,28 +100,93 @@ async function searchSeat(data) {
 async function waitForVerifyCaptchaClose() {
     console.log("waitForVerifyCaptchaClose");
     console.log(window.document.getElementById("certification").style.display);
-    if (window.document.getElementById("certification").style.display == "none") {
+    if (!botRunning || window.document.getElementById("certification").style.display == "none") {
         return;
     }
     await sleep(1000);
     await waitForVerifyCaptchaClose();
 }
 
-async function waitFirstLoad() {
+async function waitFirstLoad(startConfig) {
     let concertId = getConcertId();
-    let data = await get_stored_value(concertId);
-    let feishuBotId = data["feishu-bot-id"];
-    console.log("feishuBotId:", feishuBotId);
+    let data = startConfig || await get_stored_value(concertId);
     if (!data) {
         return;
     }
+    let feishuBotId = data["feishu-bot-id"];
     await sleep(5000);
     await waitForVerifyCaptchaClose();
+    if (!botRunning) {
+        return;
+    }
     openRangeList();
     await sleep(1000);
     await searchSeat(data);
-    sendFeiShuMsg(feishuBotId, `[${new Date().toLocaleString()}]抢票成功`);
+    if (window.isSuccess) {
+        sendFeiShuMsg(feishuBotId, `[${new Date().toLocaleString()}]抢票成功`);
+        markRunStateStopped();
+    }
 }
 
+function startBot(config) {
+    if (botRunning) {
+        return;
+    }
 
-waitFirstLoad();
+    window.isSuccess = false;
+    botRunning = true;
+    waitFirstLoad(config);
+}
+
+function stopBot() {
+    botRunning = false;
+    window.isSuccess = true;
+    markRunStateStopped();
+    console.log("[Melon] Ticket bot stopped.");
+}
+
+function markRunStateStopped() {
+    const storageKeys = window.TicketBotConfig && window.TicketBotConfig.storageKeys;
+    const runStateKey = storageKeys ? storageKeys.botRunState : "ticketBotRunState";
+    store_value(runStateKey, {
+        running: false,
+        platform: "melon",
+        concertId: getConcertId(),
+    });
+}
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    const actions = window.TicketBotConfig && window.TicketBotConfig.actions;
+    const startAction = actions ? actions.startBot : "startTicketBot";
+    const stopAction = actions ? actions.stopBot : "stopTicketBot";
+
+    if (request.action === startAction && (!request.platform || request.platform === "melon")) {
+        startBot(request.config);
+        sendResponse({ status: "started" });
+        return true;
+    }
+
+    if (request.action === stopAction && (!request.platform || request.platform === "melon")) {
+        stopBot();
+        sendResponse({ status: "stopped" });
+        return true;
+    }
+});
+
+async function startFromRunState() {
+    const storageKeys = window.TicketBotConfig && window.TicketBotConfig.storageKeys;
+    const runStateKey = storageKeys ? storageKeys.botRunState : "ticketBotRunState";
+    const runState = await get_stored_value(runStateKey);
+    if (!runState || !runState.running || runState.platform !== "melon") {
+        return;
+    }
+
+    const currentConcertId = getConcertId();
+    if (runState.concertId && currentConcertId && runState.concertId !== currentConcertId) {
+        return;
+    }
+
+    startBot(runState.config);
+}
+
+startFromRunState();

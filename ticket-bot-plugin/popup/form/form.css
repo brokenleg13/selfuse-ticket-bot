@@ -1,3 +1,9 @@
+body {
+    height: auto;
+    min-height: 500px;
+    overflow-y: auto;
+}
+
 form {
     width: 80%;
     max-width: 400px;
@@ -63,6 +69,7 @@ label {
 
 /* Style for text inputs and selects */
 input[type="text"],
+input[type="number"],
 select,
 input[type="date"],
 input[type="time"] {
@@ -70,6 +77,22 @@ input[type="time"] {
     border: 1px solid #ddd;
     border-radius: 5px;
     font-size: 14px;
+}
+
+.interpark-extra-config {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.form-section-title {
+    border-top: 1px solid #eee;
+    color: #2f056b;
+    font-size: 16px;
+    font-weight: 700;
+    margin-top: 8px;
+    padding-top: 12px;
 }
 
 /* Style for the button row */
@@ -98,4 +121,12 @@ button {
 button:hover {
     background-color: #1a0347;
     color: #ebe0f9;
+}
+
+form .button-concert {
+    width: auto;
+    min-width: 120px;
+    display: inline-flex;
+    flex-direction: row;
+    justify-content: center;
 }

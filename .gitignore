@@ -1,0 +1,19 @@
+# Chrome extension build/runtime artifacts
+ticket-bot-plugin/_metadata/
+
+# Local debug snapshots
+ticket-bot-plugin/scripts/yes24/page.html
+
+# Local sensitive overrides
+ticket-bot-plugin/config/local.json
+
+# Local Python/runtime caches
+.venv/
+.cache/
+__pycache__/
+.pytest_cache/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
