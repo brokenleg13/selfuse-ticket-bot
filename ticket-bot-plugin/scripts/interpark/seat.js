@@ -20,6 +20,7 @@
         IDLE: "idle",
         STARTING: "starting",
         PRODUCT_PAGE: "product_page",
+        QUEUE_WAITING: "queue_waiting",
         BOOKING_PAGE: "booking_page",
         DATE_TIME: "date_time",
         CAPTCHA: "captcha",
@@ -36,6 +37,7 @@
     let lastSummaryText = "";
     let lockedSeatContext = null;
     let botState = BOT_STATE.IDLE;
+    let queueHeartbeatCount = 0;
     const pageStartedAt = typeof performance !== "undefined" && Number.isFinite(performance.timeOrigin)
         ? performance.timeOrigin
         : Date.now();
@@ -2609,6 +2611,49 @@
         return /gpoticket\.globalinterpark\.com/i.test(location.hostname) && /\/Global\/Play\/Book\/BookMain\.asp/i.test(location.pathname);
     }
 
+    function isInterparkWaitingPage() {
+        return /tickets\.interpark\.com/i.test(location.hostname) && /\/waiting/i.test(location.pathname);
+    }
+
+    function getQueueWaitingStatus(heartbeatCount) {
+        const bodyText = normalizeText(document.body && document.body.innerText || "");
+        const rankMatch = bodyText.match(/(?:我的)?等候順位\s*([\d,]+)/i);
+        const waitingMatch = bodyText.match(/現在等候人數\s*([\d,.]+)/i);
+        const progressMatch = bodyText.match(/訂購率\s*([\d.]+%)/i);
+        const parts = [];
+        const heartbeatText = `alive #${heartbeatCount} ${new Date().toLocaleTimeString()}`;
+
+        if (rankMatch) {
+            parts.push(`rank ${rankMatch[1]}`);
+        }
+
+        if (waitingMatch) {
+            parts.push(`waiting ${waitingMatch[1]}`);
+        }
+
+        if (progressMatch) {
+            parts.push(`progress ${progressMatch[1]}`);
+        }
+
+        return parts.length
+            ? `Queue page detected; silently waiting (${parts.join(", ")}; ${heartbeatText}).`
+            : `Queue page detected; silently waiting for automatic redirect (${heartbeatText}).`;
+    }
+
+    async function runQueueWaitLoop() {
+        setBotState(BOT_STATE.QUEUE_WAITING);
+        queueHeartbeatCount = 0;
+        while (botRunning && isInterparkWaitingPage()) {
+            if (!await syncRunStateConfig()) {
+                return;
+            }
+
+            queueHeartbeatCount += 1;
+            updateStatus(getQueueWaitingStatus(queueHeartbeatCount));
+            await delay(10000);
+        }
+    }
+
     async function startBot(botConfig) {
         activeConfig = botConfig || activeConfig || {};
         if (botRunning) {
@@ -2624,6 +2669,12 @@
             if (isMatchingBooking(activeConfig)) {
                 await waitAndClickNolBuyButton();
             }
+            return;
+        }
+
+        if (isInterparkWaitingPage()) {
+            clearTimeout(refreshTimer);
+            runQueueWaitLoop();
             return;
         }
 

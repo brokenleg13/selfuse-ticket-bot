@@ -23,6 +23,7 @@
         "https://ticket.yes24.com/*",
         "https://cdn-botmanager.stclab.com/*",
         "https://world.nol.com/*",
+        "https://tickets.interpark.com/*",
         "https://gpoticket.globalinterpark.com/*",
         "http://127.0.0.1/*",
         "http://localhost/*"
@@ -105,6 +106,7 @@
                 "https://world.nol.com/*/ticket/genre/*/products/*",
                 "https://world.nol.com/ticket/places/*/products/*",
                 "https://world.nol.com/ticket/genre/*/products/*",
+                "https://tickets.interpark.com/waiting*",
                 "https://gpoticket.globalinterpark.com/Global/Play/Book/BookMain.asp*"
             ],
             "js": [
