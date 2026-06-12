@@ -7,7 +7,8 @@
         "storage",
         "activeTab",
         "scripting",
-        "declarativeNetRequest"
+        "declarativeNetRequest",
+        "downloads"
     ],
     "declarative_net_request": {
         "rule_resources": [
@@ -26,7 +27,8 @@
         "https://tickets.interpark.com/*",
         "https://gpoticket.globalinterpark.com/*",
         "http://127.0.0.1/*",
-        "http://localhost/*"
+        "http://localhost/*",
+        "<all_urls>"
     ],
     "background": {
         "service_worker": "background.js"
@@ -42,6 +44,23 @@
         }
     ],
     "content_scripts": [
+        {
+            "matches": [
+                "https://ticket.yes24.com/*",
+                "https://tkglobal.melon.com/*",
+                "https://world.nol.com/*",
+                "https://tickets.interpark.com/*",
+                "https://gpoticket.globalinterpark.com/*",
+                "https://booking.thaiticketmajor.com/*",
+                "https://www.thaiticketmajor.com/*"
+            ],
+            "js": [
+                "scripts/common/beforeunload-blocker.js"
+            ],
+            "run_at": "document_start",
+            "all_frames": true,
+            "world": "MAIN"
+        },
         {
             "matches": [
                 "https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleProcess.aspx",

@@ -27,8 +27,11 @@ Interpark captcha OCR is configured in `config.js`:
 
 - `interpark.captchaOcr.enabled`: try local OCR before waiting for manual input.
 - `interpark.captchaOcr.serviceUrl`: default `http://127.0.0.1:17861/ocr`.
+- `interpark.captchaOcr.sliderServiceUrl`: default `http://127.0.0.1:17861/slider`.
 - `interpark.captchaOcr.timeoutMs`: request timeout. Keep this short so manual
   input remains the fallback when the service is not running.
+- `interpark.captchaOcr.sliderConfidence`: confidence threshold for slider gap
+  detection, default `0.7`.
 - `interpark.captchaOcr.codeLength`: current captcha length, default `6`.
 
 Start the local service from the repository root:
@@ -36,3 +39,7 @@ Start the local service from the repository root:
 ```powershell
 .\local-services\start_glm_ocr_service.ps1
 ```
+
+When a slider captcha appears and local slider OCR is missing, unavailable, or
+returns a low-confidence/invalid box, the Interpark bot pauses and sends the
+configured Feishu webhook notification with the failure reason.

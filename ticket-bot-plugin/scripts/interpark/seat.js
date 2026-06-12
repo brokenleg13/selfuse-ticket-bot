@@ -46,6 +46,7 @@
         lastAttemptAt: 0,
         lastImageKey: "",
         lastMessage: "",
+        lastSliderError: "",
     };
 
     function getRunStateKey() {
@@ -106,6 +107,15 @@
 
     function notifySelectedSeats(prefix, seats) {
         notifyFeishu(`${prefix}：${formatSeatList(seats)}`);
+    }
+
+    async function pauseBotWithNotification(message) {
+        botRunning = false;
+        clearTimeout(refreshTimer);
+        await markRunStateStopped();
+        setBotState(BOT_STATE.STOPPED);
+        updateStatus(message);
+        notifyFeishu(`Interpark 已暂停：${message}`);
     }
 
     function setBotState(nextState, detail) {
@@ -250,9 +260,11 @@
         return {
             enabled: captchaOcrConfig.enabled !== false,
             serviceUrl: captchaOcrConfig.serviceUrl || "http://127.0.0.1:17861/ocr",
+            sliderServiceUrl: captchaOcrConfig.sliderServiceUrl || "http://127.0.0.1:17861/slider",
             timeoutMs: Number(captchaOcrConfig.timeoutMs) || 3000,
             retryIntervalMs: Number(captchaOcrConfig.retryIntervalMs) || 8000,
             maxAttempts: Math.max(1, Number(captchaOcrConfig.maxAttempts) || 3),
+            sliderConfidence: Number(captchaOcrConfig.sliderConfidence) || 0.7,
             invalidRefreshDelayMs: Number(captchaOcrConfig.invalidRefreshDelayMs) || 600,
             submitCheckDelayMs: Number(captchaOcrConfig.submitCheckDelayMs) || 1200,
             codeLength: Number(captchaOcrConfig.codeLength) || 6,
@@ -304,6 +316,27 @@
     function getCaptchaWrap() {
         const seatDocument = getSeatDocument();
         return seatDocument && seatDocument.getElementById("divCaptchaWrap");
+    }
+
+    function findSliderCaptchaElement() {
+        const seatDocument = getSeatDocument();
+        const detailFrame = seatDocument && seatDocument.getElementById("ifrmSeatDetail");
+        const detailDocument = detailFrame && detailFrame.contentDocument;
+        const roots = [seatDocument, detailDocument].filter(Boolean);
+
+        for (const root of roots) {
+            const slider = root.getElementById && root.getElementById("captchSlider");
+            if (slider) {
+                return slider;
+            }
+        }
+
+        return null;
+    }
+
+    function isSliderCaptchaPopupVisible() {
+        const slider = findSliderCaptchaElement();
+        return isElementVisible(slider);
     }
 
     function findCaptchaImageElement() {
@@ -389,7 +422,43 @@
         });
     }
 
-    async function captureElementAsDataUrl(element) {
+    function saveDebugImage(dataUrl, filename) {
+        return new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage({
+                action: "saveDebugImage",
+                dataUrl,
+                filename,
+            }, response => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                    return;
+                }
+                if (!response || !response.success) {
+                    reject(new Error(response && response.error || "Debug image save failed."));
+                    return;
+                }
+                resolve(response);
+            });
+        });
+    }
+
+    function buildSliderDebugFilename(areaCode) {
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const areaPart = normalizeAreaCode(areaCode) || "unknown";
+        return `ticket-bot-plugin/interpark-captchSlider-${areaPart}-${stamp}.png`;
+    }
+
+    async function captureAndSaveSliderCaptchaSnapshot(areaCode) {
+        const slider = findSliderCaptchaElement();
+        if (!slider) {
+            throw new Error("captchSlider not found.");
+        }
+
+        const dataUrl = await captureElementAsDataUrl(slider);
+        return saveDebugImage(dataUrl, buildSliderDebugFilename(areaCode));
+    }
+
+    async function captureElementAsDataUrl(element, padding = 4) {
         if (!element) {
             throw new Error("Captcha image not found.");
         }
@@ -397,9 +466,16 @@
         const screenshot = await captureVisibleTab();
         const screenshotImage = await loadImageDataUrl(screenshot);
         const rect = getTopViewportRect(element);
-        const ratioX = screenshotImage.naturalWidth / Math.max(1, window.innerWidth);
-        const ratioY = screenshotImage.naturalHeight / Math.max(1, window.innerHeight);
-        const padding = 4;
+        let viewportWidth = window.innerWidth;
+        let viewportHeight = window.innerHeight;
+        try {
+            viewportWidth = window.top && window.top.innerWidth || viewportWidth;
+            viewportHeight = window.top && window.top.innerHeight || viewportHeight;
+        } catch (error) {
+            // Cross-origin frames fall back to the current window dimensions.
+        }
+        const ratioX = screenshotImage.naturalWidth / Math.max(1, viewportWidth);
+        const ratioY = screenshotImage.naturalHeight / Math.max(1, viewportHeight);
         const sourceX = Math.max(0, Math.floor((rect.left - padding) * ratioX));
         const sourceY = Math.max(0, Math.floor((rect.top - padding) * ratioY));
         const sourceWidth = Math.min(
@@ -505,6 +581,61 @@
                 code,
                 elapsedMs: payload.elapsedMs,
                 rawText: payload.rawText,
+            };
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    async function requestSliderCaptchaRecognition(dataUrl, options) {
+        const dataImage = await loadImageDataUrl(dataUrl);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+        try {
+            const response = await fetch(options.sliderServiceUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    image: dataUrl,
+                    conf: options.sliderConfidence,
+                }),
+                signal: controller.signal,
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || !payload.ok) {
+                throw new Error(payload.error || `Slider OCR service returned ${response.status}`);
+            }
+
+            const confidence = Number(payload.confidence) || 0;
+            if (confidence < options.sliderConfidence) {
+                throw new Error(`Slider OCR confidence too low: ${confidence.toFixed(4)} < ${options.sliderConfidence}`);
+            }
+
+            const box = Array.isArray(payload.box) ? payload.box.map(Number) : [];
+            if (box.length !== 4 || box.some(value => !Number.isFinite(value))) {
+                throw new Error(`Slider OCR result missing valid box: ${JSON.stringify(payload).slice(0, 160)}`);
+            }
+
+            const boxWidth = Number(payload.width ?? (box[2] - box[0]));
+            const boxHeight = Number(payload.height ?? (box[3] - box[1]));
+            if (!Number.isFinite(boxWidth) || !Number.isFinite(boxHeight) || boxWidth <= 1 || boxHeight <= 1) {
+                throw new Error(`Slider OCR returned invalid box size: ${JSON.stringify(box)}`);
+            }
+
+            const gapLeft = Number(payload.x ?? (Array.isArray(payload.box) ? payload.box[0] : NaN));
+            if (!Number.isFinite(gapLeft) || gapLeft <= 0) {
+                throw new Error(`Slider OCR result missing gap left: ${JSON.stringify(payload).slice(0, 160)}`);
+            }
+
+            return {
+                gapLeft,
+                confidence,
+                elapsedMs: payload.elapsedMs,
+                imageWidth: dataImage.naturalWidth || dataImage.width || 1,
+                imageHeight: dataImage.naturalHeight || dataImage.height || 1,
+                raw: payload,
             };
         } finally {
             clearTimeout(timeout);
@@ -811,6 +942,75 @@
         }
     }
 
+    async function waitForSliderCaptchaResult(timeoutMs = 1600) {
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < timeoutMs) {
+            if (!isSliderCaptchaPopupVisible()) {
+                return true;
+            }
+            await delay(120);
+        }
+        return !isSliderCaptchaPopupVisible();
+    }
+
+    async function solveSliderCaptchaWithLocalOcr(areaCode) {
+        const options = getCaptchaOcrOptions();
+        if (!options.enabled || captchaOcrState.attempting) {
+            return false;
+        }
+
+        const now = Date.now();
+        if (now - captchaOcrState.lastAttemptAt < options.retryIntervalMs) {
+            return false;
+        }
+
+        captchaOcrState.attempting = true;
+        captchaOcrState.lastAttemptAt = now;
+        captchaOcrState.lastSliderError = "";
+        try {
+            const slider = findSliderCaptchaElement();
+            if (!slider) {
+                captchaOcrState.lastSliderError = "captchSlider not found";
+                updateCaptchaOcrStatus("Slider captcha OCR skipped: captchSlider not found.");
+                return false;
+            }
+
+            const dataUrl = await captureElementAsDataUrl(slider, 0);
+            const rect = slider.getBoundingClientRect();
+            updateStatus(`Slider captcha detected${areaCode ? ` for area ${areaCode}` : ""}; calling local recognizer.`);
+            const result = await requestSliderCaptchaRecognition(dataUrl, options);
+            const targetBlockLeft = result.gapLeft * (rect.width / Math.max(1, result.imageWidth));
+            if (!Number.isFinite(targetBlockLeft) || targetBlockLeft <= 0 || targetBlockLeft >= rect.width) {
+                throw new Error(`Slider target left out of range: ${targetBlockLeft}`);
+            }
+            updateStatus(
+                `Slider gap left ${result.gapLeft.toFixed(2)}px -> ${targetBlockLeft.toFixed(2)} CSS px`
+                + `${result.elapsedMs ? ` (${result.elapsedMs}ms)` : ""}.`,
+            );
+
+            const dragged = await solveSliderCaptchaInPageWorld(targetBlockLeft);
+            if (!dragged) {
+                captchaOcrState.lastSliderError = "slider drag failed";
+                return false;
+            }
+
+            if (await waitForSliderCaptchaResult(Math.max(options.submitCheckDelayMs, 3500))) {
+                updateStatus("Slider captcha verified.");
+                return true;
+            }
+
+            captchaOcrState.lastSliderError = "slider captcha still visible after drag";
+            updateCaptchaOcrStatus("Slider captcha still visible after drag; waiting for manual input.");
+            return false;
+        } catch (error) {
+            captchaOcrState.lastSliderError = error.message || String(error);
+            updateCaptchaOcrStatus(`Slider captcha OCR unavailable: ${captchaOcrState.lastSliderError}; waiting for manual input.`);
+            return false;
+        } finally {
+            captchaOcrState.attempting = false;
+        }
+    }
+
     function parseAvailableSeats() {
         const seatDocument = getSeatDocument();
         if (!seatDocument || !seatDocument.body) {
@@ -1075,6 +1275,35 @@
                 }
 
                 updateStatus(`Applied ${response.added || selectedSeats.length} locked seat(s) to page.`);
+                resolve(true);
+            });
+        });
+    }
+
+    async function solveSliderCaptchaInPageWorld(targetBlockLeft) {
+        if (!Number.isFinite(targetBlockLeft)) {
+            return false;
+        }
+
+        return new Promise(resolve => {
+            chrome.runtime.sendMessage({
+                action: "interparkMainWorldAction",
+                mode: "solveSliderCaptcha",
+                targetBlockLeft,
+            }, response => {
+                if (chrome.runtime.lastError) {
+                    updateStatus(`Main-world slider captcha failed: ${chrome.runtime.lastError.message}`);
+                    resolve(false);
+                    return;
+                }
+
+                if (!response || !response.success) {
+                    updateStatus(`Main-world slider captcha failed: ${response && (response.error || response.reason) || "unknown"}`);
+                    resolve(false);
+                    return;
+                }
+
+                updateStatus(`Slider captcha dragged: block left ${response.finalBlockLeft}px / target ${response.targetBlockLeft}px.`);
                 resolve(true);
             });
         });
@@ -1474,6 +1703,25 @@
             .map((element, index) => parseSeatCandidateWithVisualRow(element, index, visualRowMap));
     }
 
+    function countSeatGridNodesFromDocument(documentLike) {
+        if (!documentLike) {
+            return 0;
+        }
+
+        const selectors = [
+            ".SeatN",
+            ".SeatN_Daegu",
+            ".SeatR",
+            ".SeatB",
+            ".SeatT",
+            "[onclick*='SelectSeat']",
+            "a[href*='SelectSeat']",
+            "[SeatGrade][Floor][RowNo][SeatNo]",
+        ].join(",");
+
+        return documentLike.querySelectorAll(selectors).length;
+    }
+
     async function fetchAreaDetail(blockCode) {
         const url = getCurrentAreaDetailUrl(blockCode);
         if (!url) {
@@ -1488,10 +1736,14 @@
             const response = await fetch(url, { credentials: "include" });
             const html = await response.text();
             const documentLike = new DOMParser().parseFromString(html, "text/html");
+            const captchaOpenDetected = /CaptchaOpen\s*\(/i.test(html);
             return {
                 blockCode,
+                ok: response.ok,
                 status: response.status,
                 htmlLength: html.length,
+                captchaOpenDetected,
+                seatNodeCount: countSeatGridNodesFromDocument(documentLike),
                 candidates: findAvailableSeatCandidatesFromDocument(documentLike),
             };
         } catch (error) {
@@ -2220,6 +2472,41 @@
                 continue;
             }
 
+            if (detail.ok && detail.captchaOpenDetected) {
+                updateStatus(`Area ${code} detail API returned CaptchaOpen; trying manual area open.`);
+                await tryOpenAreaForCaptchaCheck(entry);
+                if (isSliderCaptchaPopupVisible()) {
+                    if (await solveSliderCaptchaWithLocalOcr(code)) {
+                        updateStatus(`Area ${code}: slider captcha solved; retry detail API.`);
+                        index -= 1;
+                        await delayBeforeNextArea(index, targetCodes.length);
+                        continue;
+                    }
+
+                    try {
+                        const saved = await captureAndSaveSliderCaptchaSnapshot(code);
+                        updateStatus(`captchSlider snapshot saved: ${saved.filename}`);
+                    } catch (error) {
+                        updateStatus(`captchSlider snapshot save failed: ${error && error.message || error}`);
+                    }
+                    const sliderReason = captchaOcrState.lastSliderError
+                        ? `滑块自动处理失败：${captchaOcrState.lastSliderError}`
+                        : "滑块自动处理失败";
+                    await pauseBotWithNotification(`区域 ${code} 的座位图接口返回 CaptchaOpen，且页面出现 captchSlider，已暂停。${sliderReason}`);
+                    return {
+                        entry,
+                        detail,
+                        locked: false,
+                        selected: false,
+                        paused: true,
+                    };
+                }
+
+                updateStatus(`Area ${code}: CaptchaOpen returned but captchSlider did not appear; continue API polling.`);
+                await delayBeforeNextArea(index, targetCodes.length);
+                continue;
+            }
+
             const candidates = filterSeatCandidatesByConfiguredRows(detail.candidates);
             if (!candidates.length) {
                 updateStatus(`Area ${code}: 0 selectable seats${describeSeatRowFilter(detail.candidates, candidates)}.`);
@@ -2269,10 +2556,31 @@
             return false;
         }
 
-        await clickElement(entry.element);
+        if (!await clickElement(entry.element)) {
+            updateStatus(`Area ${entry.code} click failed; trying frame load fallback.`);
+            return false;
+        }
         await delay(800);
         updateStatus(`Clicked area ${entry.code} (${entry.count || 0} 座).`);
         return true;
+    }
+
+    async function tryOpenAreaForCaptchaCheck(entry) {
+        if (!entry) {
+            return false;
+        }
+
+        if (entry.element && await clickArea(entry)) {
+            await delay(1000);
+            return true;
+        }
+
+        if (await loadAreaInFrame(entry)) {
+            await delay(1000);
+            return true;
+        }
+
+        return false;
     }
 
     function getSelectedAreaSnapshot() {
@@ -2532,6 +2840,10 @@
                 return;
             }
 
+            if (result.areaResult && result.areaResult.paused) {
+                return;
+            }
+
             if (result.areaResult && result.areaResult.locked) {
                 setBotState(BOT_STATE.LOCKED);
                 const firstSeat = lockedSeatContext && lockedSeatContext.firstSeat;
@@ -2575,9 +2887,12 @@
                 && style.visibility !== "hidden";
         });
         if (target) {
-            await clickVisibleElement(target);
-            updateStatus("Clicked NOL buy button.");
-            return true;
+            if (await clickVisibleElement(target)) {
+                updateStatus("Clicked NOL buy button.");
+                return true;
+            }
+            updateStatus("NOL buy button click failed; waiting before retry.");
+            return false;
         }
 
         updateStatus("Buy button not found. Open the product page and click manually.");

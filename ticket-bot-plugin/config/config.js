@@ -29,9 +29,11 @@
             captchaOcr: {
                 enabled: true,
                 serviceUrl: 'http://127.0.0.1:17861/ocr',
+                sliderServiceUrl: 'http://127.0.0.1:17861/slider',
                 timeoutMs: 3000,
                 retryIntervalMs: 8000,
                 maxAttempts: 3,
+                sliderConfidence: 0.7,
                 invalidRefreshDelayMs: 600,
                 submitCheckDelayMs: 1200,
                 codeLength: 6,

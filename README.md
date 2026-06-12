@@ -94,7 +94,7 @@ Interpark 当前不依赖油猴脚本点击 Next。插件通过 `chrome.scriptin
 
 ## GLM-OCR 本地验证码服务
 
-本项目使用 [zai-org/GLM-OCR](https://github.com/zai-org/GLM-OCR) 做 Interpark 验证码本地识别。服务运行在本机，插件只请求 `127.0.0.1`，服务不可用时自动降级为人工输入验证码。
+本项目使用 [zai-org/GLM-OCR](https://github.com/zai-org/GLM-OCR) 做 Interpark 文字验证码本地识别，并使用 [chenwei-zhao/captcha-recognizer](https://github.com/chenwei-zhao/captcha-recognizer) 做滑块验证码缺口识别。服务运行在本机，插件只请求 `127.0.0.1`；文字验证码服务不可用时会降级为人工输入，滑块验证码服务不可用或依赖缺失时会暂停并发送通知。
 
 ### 环境要求
 
@@ -102,7 +102,8 @@ Interpark 当前不依赖油猴脚本点击 Next。插件通过 `chrome.scriptin
 - Python 虚拟环境：默认路径为仓库根目录下 `.venv`。
 - 建议使用 NVIDIA 显卡和 CUDA 版 PyTorch；CPU 也能启动但识别速度会明显变慢。
 - 需要能访问 Hugging Face 下载 `zai-org/GLM-OCR` 模型；首次启动会下载并加载模型。
-- Chrome 插件需要已包含本地服务权限：`http://127.0.0.1/*`、`http://localhost/*`。
+- 滑块识别依赖 [chenwei-zhao/captcha-recognizer](https://github.com/chenwei-zhao/captcha-recognizer)，它会安装 `onnxruntime`、`opencv-python`、`shapely` 等依赖。
+- Chrome 插件需要已包含本地服务和截图权限：`http://127.0.0.1/*`、`http://localhost/*`、`<all_urls>`。
 
 ### 安装依赖
 
@@ -119,10 +120,10 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 ```
 
-安装 GLM-OCR 服务所需 Python 包：
+安装本地验证码服务所需 Python 包：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -U transformers accelerate pillow protobuf sentencepiece tiktoken einops
+.\.venv\Scripts\python.exe -m pip install -U transformers accelerate pillow protobuf sentencepiece tiktoken einops captcha-recognizer
 ```
 
 ### 启动服务
@@ -142,7 +143,9 @@ python -m venv .venv
 默认地址：
 
 - 健康检查：`http://127.0.0.1:17861/health`
-- OCR 接口：`http://127.0.0.1:17861/ocr`
+- 文字 OCR 接口：`http://127.0.0.1:17861/ocr`
+- 滑块缺口接口：`http://127.0.0.1:17861/slider`
+- 滑块初始偏移接口：`http://127.0.0.1:17861/slider/offset`
 
 健康检查示例：
 
@@ -154,6 +157,7 @@ Invoke-RestMethod http://127.0.0.1:17861/health
 
 - `ok: true`
 - `model: "zai-org/GLM-OCR"`
+- `sliderEnabled: true`
 - `cuda: true/false`
 - `device`: 当前使用的设备名称
 
@@ -165,9 +169,11 @@ Invoke-RestMethod http://127.0.0.1:17861/health
 captchaOcr: {
     enabled: true,
     serviceUrl: 'http://127.0.0.1:17861/ocr',
+    sliderServiceUrl: 'http://127.0.0.1:17861/slider',
     timeoutMs: 3000,
     retryIntervalMs: 8000,
     maxAttempts: 3,
+    sliderConfidence: 0.7,
     invalidRefreshDelayMs: 600,
     submitCheckDelayMs: 1200,
     codeLength: 6,
@@ -178,9 +184,11 @@ captchaOcr: {
 
 - `enabled`：是否优先尝试本地 OCR。
 - `serviceUrl`：本地 OCR 服务地址。
+- `sliderServiceUrl`：本地滑块验证码缺口识别服务地址。
 - `timeoutMs`：单次 OCR 请求超时，超时后走人工输入。
 - `retryIntervalMs`：同一张验证码重复识别失败后的重试间隔。
 - `maxAttempts`：最多自动识别次数，超过后等待人工输入。
+- `sliderConfidence`：滑块缺口识别置信度阈值，默认 `0.7`。
 - `invalidRefreshDelayMs`：识别结果非法或页面提示验证码错误后，刷新验证码前后的等待时间。
 - `submitCheckDelayMs`：提交验证码后等待页面反馈的时间。
 - `codeLength`：当前 Interpark 验证码长度，现按 6 位大写英文字母处理。
@@ -192,6 +200,9 @@ captchaOcr: {
 - 如果结果包含数字、少于 6 位，或不是 6 个字母，插件会刷新验证码并重试。
 - 如果页面提示“请重新确认输入的文字”等验证码错误，插件也会刷新验证码并重试。
 - OCR 服务未启动、请求超时、模型报错、超过最大重试次数时，插件会显示等待人工输入，不会阻塞手动操作。
+- 座位图接口返回 `CaptchaOpen` 且页面出现 `captchSlider` 时，插件会截图调用 `/slider`，识别缺口后模拟拖动滑块。
+- `/slider` 返回 `ok: false`、`box` 无效、`confidence` 低于 `sliderConfidence`、服务未启动、或缺少 `captcha-recognizer` 依赖时，插件不会拖动滑块，会保存调试截图、暂停当前任务，并通过已配置的飞书机器人 Webhook 发送暂停通知。
+- 滑块接口会返回 `candidates` 供排查；全图中同时识别到左侧滑块本体和右侧缺口时，服务默认选择右侧缺口作为目标。
 
 ### 性能参考
 
