@@ -959,13 +959,8 @@
             return false;
         }
 
-        const now = Date.now();
-        if (now - captchaOcrState.lastAttemptAt < options.retryIntervalMs) {
-            return false;
-        }
-
         captchaOcrState.attempting = true;
-        captchaOcrState.lastAttemptAt = now;
+        captchaOcrState.lastAttemptAt = Date.now();
         captchaOcrState.lastSliderError = "";
         try {
             const slider = findSliderCaptchaElement();
@@ -2447,6 +2442,7 @@
     }
 
     async function scanAreaDetailApis(entries, targetCodes) {
+        const sliderCaptchaAttemptsByArea = new Map();
         for (let index = 0; index < targetCodes.length; index++) {
             const code = targetCodes[index];
             if (!botRunning) {
@@ -2476,10 +2472,18 @@
                 updateStatus(`Area ${code} detail API returned CaptchaOpen; trying manual area open.`);
                 await tryOpenAreaForCaptchaCheck(entry);
                 if (isSliderCaptchaPopupVisible()) {
-                    if (await solveSliderCaptchaWithLocalOcr(code)) {
+                    const options = getCaptchaOcrOptions();
+                    const attempts = sliderCaptchaAttemptsByArea.get(code) || 0;
+                    if (attempts < options.maxAttempts) {
+                        sliderCaptchaAttemptsByArea.set(code, attempts + 1);
+                    } else {
+                        captchaOcrState.lastSliderError = `slider captcha attempts exhausted for area ${code}`;
+                    }
+
+                    if (attempts < options.maxAttempts && await solveSliderCaptchaWithLocalOcr(code)) {
                         updateStatus(`Area ${code}: slider captcha solved; retry detail API.`);
+                        await delay(Math.max(options.submitCheckDelayMs, 2000));
                         index -= 1;
-                        await delayBeforeNextArea(index, targetCodes.length);
                         continue;
                     }
 
