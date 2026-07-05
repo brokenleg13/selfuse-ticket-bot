@@ -69,9 +69,13 @@ async function findSeat() {
 
             seat[i].dispatchEvent(clickEvent);
             let nextBtn = await waitForElement(frame.document, "nextTicketSelection");
-            if (nextBtn) {
-                nextBtn.click();
+            if (!nextBtn) {
+                // Selection didn't go through (e.g. Melon reverted to the
+                // section list); try the next colored rect instead of
+                // reporting a false success.
+                continue;
             }
+            nextBtn.click();
             return true;
         }
     }
@@ -81,16 +85,16 @@ async function findSeat() {
 async function checkCaptchaFinish() {
     if (document.getElementById("certification").style.display != "none") {
         await sleep(1000);
-        checkCaptchaFinish();
-        return;
+        return await checkCaptchaFinish();
     }
     let frame = theFrame();
     await sleep(500);
     let nextBtn = await waitForElement(frame.document, "nextTicketSelection");
-    if (nextBtn) {
-        nextBtn.click();
+    if (!nextBtn) {
+        return false;
     }
-    return;
+    nextBtn.click();
+    return true;
 }
 
 async function searchSeat(data) {
@@ -104,8 +108,7 @@ async function searchSeat(data) {
         }
         openRangeList();
         clickOnArea(sec);
-        if (await findSeat()) {
-            checkCaptchaFinish();
+        if (await findSeat() && await checkCaptchaFinish()) {
             return;
         }
         await sleep(750 + Math.random() * 500);
@@ -137,7 +140,18 @@ async function waitFirstLoad(startConfig) {
     }
     openRangeList();
     await sleep(1000);
-    await searchSeat(data);
+    // searchSeat() returns as soon as one seat is picked and confirmed,
+    // but Melon can still bounce the user back to the section list
+    // afterwards (e.g. pressing back, or the seat becoming unavailable
+    // on the next step). Keep retrying until the bot is stopped or a
+    // pick actually sticks.
+    while (botRunning && !window.isSuccess) {
+        await searchSeat(data);
+        if (!botRunning || window.isSuccess) {
+            break;
+        }
+        await sleep(1000);
+    }
     if (window.isSuccess) {
         sendFeiShuMsg(feishuBotId, `[${new Date().toLocaleString()}] Ticket grab succeeded`);
         markRunStateStopped();
