@@ -4,8 +4,20 @@ function getConcertId() {
     return document.getElementById("prodIdNum").value;
 }
 
-function select_day(day) {
-    let daysAvaible = document.getElementById("list_date");
+async function waitForChildren(id, timeoutMs = 3000, intervalMs = 100) {
+    const deadline = Date.now() + timeoutMs;
+    let element = document.getElementById(id);
+    while ((!element || element.childElementCount === 0) && Date.now() < deadline) {
+        await sleep(intervalMs);
+        element = document.getElementById(id);
+    }
+    return element;
+}
+
+async function select_day(day) {
+    let daysAvaible = await waitForChildren("list_date");
+    if (!daysAvaible) return;
+
     let num = daysAvaible.childElementCount;
     if (num <= 1) return;
 
@@ -19,8 +31,10 @@ function select_day(day) {
     return;
 }
 
-function select_time(time) {
-    let timesAvaible = document.getElementById("list_time");
+async function select_time(time) {
+    let timesAvaible = await waitForChildren("list_time");
+    if (!timesAvaible) return;
+
     let num = timesAvaible.childElementCount;
     if (num <= 1) return;
 
@@ -60,9 +74,9 @@ async function searchConcert(startConfig) {
     if (!botRunning) {
         return;
     }
-    select_day(data.date.replaceAll("-", ""));
+    await select_day(data.date.replaceAll("-", ""));
     await sleep(500);
-    select_time(formatTime(data.time));
+    await select_time(formatTime(data.time));
     await sleep(500);
 
     await sleep(5000);

@@ -203,7 +203,7 @@
                 e
             }(Error);
             function l(t, e) {
-                return [{}, { bot: !1 }]; // 强制返回：未检测到任何机器人特征
+                return [{}, { bot: !1 }]; // Force return: no bot characteristics detected
             }
             function f(t) {
                 return o(this, void 0, void 0, (function() {
@@ -3782,7 +3782,7 @@
         }
           , C = function(t) {
             // window.top && window.top !== window.self ? window.top.location.href = t.toString() : window.location.href = t.toString()
-            console.log("拦截到重定向请求:", t);
+            console.log("Intercepted redirect request:", t);
         };
         function A(t) {
             if (t)
@@ -3790,7 +3790,7 @@
                     var e = new URL(t);
                     e.searchParams.append("redirectUrl", window.location.href),
                     // window.top && window.top !== window.self ? window.top.location.href = e.toString() : window.location.href = e.toString()
-                    console.log("拦截到重定向请求 (A):", e.toString());
+                    console.log("Intercepted redirect request (A):", e.toString());
                 } catch (t) {
                     console.error("Unable to redirect using top. Falling back to current window redirect.", t)
                 }
@@ -4403,7 +4403,7 @@
             )))).apply(this, arguments)
         }
         function K(t, e, n, r) {
-            return; // 核心修改：直接阻断所有上报请求
+            return; // Core modification: block all reporting requests directly
         }
         function Y() {
             return (Y = z(q().mark((function t(e, n, r, o) {
@@ -4488,7 +4488,7 @@
           , tt = g
           , et = !1;
         function nt(t) {
-            return g; // 始终返回正常状态
+            return g; // Always return normal status
         }
         function rt() {
             try {
@@ -6621,7 +6621,7 @@
             }, {
                 key: "detectSelenium",
                 value: function() {
-                    return !1; // 强制返回 false
+                    return !1; // Force return false
                 }
             }, {
                 key: "detectPlaywright",

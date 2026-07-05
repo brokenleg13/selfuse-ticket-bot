@@ -1,6 +1,6 @@
 async function sendFeiShuMsg(webhookUrl, msg) {
     if (!webhookUrl) {
-        console.log("WEBHOOK_URL未设置");
+        console.log("WEBHOOK_URL is not set");
         return;
     }
 
@@ -19,6 +19,6 @@ async function sendFeiShuMsg(webhookUrl, msg) {
         body: JSON.stringify(payload),
     })
         .then(res => res.json())
-        .then(json => console.log('结果:', json))
-        .catch(err => console.error('错误:', err));
+        .then(json => console.log('Result:', json))
+        .catch(err => console.error('Error:', err));
 }

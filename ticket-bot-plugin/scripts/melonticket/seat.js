@@ -1,4 +1,4 @@
-window.isSuccess = false; // 是否成功
+window.isSuccess = false; // whether it succeeded
 let botRunning = false;
 
 async function sleep(t) {
@@ -22,10 +22,10 @@ function openRangeList() {
         return;
     }
     let frame = theFrame();
-    // 查找 class 包含 seat_name 但不包含 open 的元素
+    // Find an element whose class includes seat_name but not open
     let sectionToOpen = frame.document.querySelector(".seat_name:not(.open)");
 
-    // 如果找到了，就点击它
+    // If found, click it
     if (sectionToOpen) {
         sectionToOpen.click();
     }
@@ -123,7 +123,7 @@ async function waitFirstLoad(startConfig) {
     await sleep(1000);
     await searchSeat(data);
     if (window.isSuccess) {
-        sendFeiShuMsg(feishuBotId, `[${new Date().toLocaleString()}]抢票成功`);
+        sendFeiShuMsg(feishuBotId, `[${new Date().toLocaleString()}] Ticket grab succeeded`);
         markRunStateStopped();
     }
 }

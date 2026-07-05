@@ -99,7 +99,7 @@ async function loadEditData(form) {
     }
 
     fillForm(data);
-    getSubmitButton(form).textContent = "更新配置";
+    getSubmitButton(form).textContent = "Update Configuration";
 }
 
 async function saveBooking(form) {

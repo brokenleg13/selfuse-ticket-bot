@@ -1,32 +1,32 @@
-/*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
-let USERID = ''; // 用户 id，可在 YES24 配置页填写“YES24 用户 ID”
-let MAX_SEAT_ID = 999; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
-let SINGLE_REQUEST_INTERVAL = 100; // 单个页面请求间隔时间
-let BAN_DURATION = 5 * 60 * 1000; // 黑名单封禁时间 (默认5分钟)
-// let REFRESH_INTERVAL = 600; // 一组页面请求间隔时间
+/*--------------------------------- Custom Config, USERID Required ---------------------------------*/
+let USERID = ''; // User ID, can be filled in on the YES24 config page under "YES24 User ID"
+let MAX_SEAT_ID = 999; // Max seat ID to scan in the standing area; tickets beyond this are not locked. Set to 9999 if no ID filtering is needed
+let SINGLE_REQUEST_INTERVAL = 100; // Interval between single page requests
+let BAN_DURATION = 5 * 60 * 1000; // Blacklist ban duration (default 5 minutes)
+// let REFRESH_INTERVAL = 600; // Interval between batches of page requests
 
 
-/*--------------------------------- 勿修改 ---------------------------------*/
-let isSuccess = false; // 是否成功
+/*--------------------------------- Do Not Modify ---------------------------------*/
+let isSuccess = false; // Whether it succeeded
 let currentSeatLayer = null;
 let blackList = [];
-let concertcfg = {};// 存储当前页面的concertcfg
+let concertcfg = {};// Stores the concertcfg for the current page
 let concertId = "";
 concertcfg.idCustomer = USERID // idCustomer
 let successBlock = "";
 let successId = "";
 let sendedIdList = [];
 let WEBHOOK_URL = '';
-let blockSelect = []; // 自定义选区
+let blockSelect = []; // Custom selected areas
 
-let seatFailureMap = {}; // 记录 { seatId: failureCount }
-let seatBlacklist = {}; // 记录 { seatId: unbanTime }
+let seatFailureMap = {}; // Records { seatId: failureCount }
+let seatBlacklist = {}; // Records { seatId: unbanTime }
 const MAX_FAILURES = 3;
 let needDelay = false;
 let botRunning = false;
 
-// region 队列
-let seatQueue = [];// 可选座位队列
+// region Queue
+let seatQueue = [];// Queue of selectable seats
 function addSeatToQueue(seat) {
     seatQueue.push(seat);
 }
@@ -41,28 +41,28 @@ function popSeatFromQueue() {
 // endregion
 
 
-//region 页面操作
+//region Page Operations
 
-// 获取演出ID
+// Get concert ID
 function getConcertId() {
     let url = window.location.href;
     let concertId = url.split("=")[1];
     return concertId;
 }
 
-// 断言日期页面打开
+// Assert date page is open
 function assertDatePageOpen() {
     const el = document.querySelector('#ContentsArea');
     if (el && el.style.display === 'block') {
-        console.log('✅ 日期页面打开');
+        console.log('✅ Date page opened');
         return true;
     } else {
-        console.log('❌ 日期页面未打开');
+        console.log('❌ Date page not opened');
         return false;
     }
 }
 
-// 断言选座页面打开
+// Assert seat selection page is open
 function assertSeatPageOpen() {
     const frame = theFrame();
     if (!frame) {
@@ -70,14 +70,14 @@ function assertSeatPageOpen() {
     }
     let seatArray = frame.getElementById("SeatFlashArea").children;
     if (seatArray && seatArray.length > 0) {
-        console.log('✅ 选座页面打开');
+        console.log('✅ Seat selection page opened');
         return true;
     } else {
-        console.log('❌ 选座页面未打开');
+        console.log('❌ Seat selection page not opened');
         return false;
     }
 }
-// 选择日期
+// Select date
 async function selectDate(data) {
     var hasDate = false;
     if (!data || !data.date || !data.time) {
@@ -108,9 +108,9 @@ async function selectDate(data) {
     return hasDate;
 }
 
-// 触发TampermonkeyClick事件
+// Trigger TampermonkeyClick event
 function TampermonkeyClick() {
-    // 直接触发自定义事件，而不是依赖storage事件
+    // Dispatch a custom event directly instead of relying on the storage event
     const clickEvent = new CustomEvent('tampermonkey-click', {
         detail: { timestamp: Date.now() }
     });
@@ -118,7 +118,7 @@ function TampermonkeyClick() {
 }
 
 
-// 获取iframe
+// Get iframe
 function theFrame() {
     if (!window.frames || window.frames.length == 0) {
         return null;
@@ -126,28 +126,28 @@ function theFrame() {
     return window.frames[0].document;
 }
 
-// 获取top window
+// Get top window
 function theTopWindow() {
     return window.document;
 }
 
-// 获取cookie
+// Get cookie
 function getCookie() {
     let frame = theTopWindow();
     return frame.cookie;
 }
 
-// 获取iframe中的idHall, idTime
+// Get idHall, idTime from the iframe
 function getUserInfo() {
-    console.log('[DEBUG] 开始获取用户信息...');
+    console.log('[DEBUG] Starting to get user info...');
 
     const iframe = document.querySelector('iframe');
     if (!iframe) {
-        console.error('[DEBUG] 未找到iframe元素');
+        console.error('[DEBUG] iframe element not found');
         return;
     }
 
-    console.log('[DEBUG] 找到iframe:', iframe.src);
+    console.log('[DEBUG] Found iframe:', iframe.src);
 
     let src = iframe.src;
     //https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=1366809&idHall=13219&block=0&stMax=10&pHCardAppOpt=0
@@ -155,31 +155,31 @@ function getUserInfo() {
         let idHall = src.split("idHall=")[1].split("&")[0];
         let idTime = src.split("idTime=")[1].split("&")[0];
 
-        console.log('[DEBUG] 解析的参数:', { idHall, idTime });
+        console.log('[DEBUG] Parsed parameters:', { idHall, idTime });
 
         concertcfg.idHall = idHall;
         concertcfg.idTime = idTime;
 
-        console.log('[DEBUG] 设置后的concertcfg:', concertcfg);
+        console.log('[DEBUG] concertcfg after setting:', concertcfg);
     } catch (error) {
-        console.error('[DEBUG] 解析iframe URL失败:', error);
+        console.error('[DEBUG] Failed to parse iframe URL:', error);
         console.error('[DEBUG] iframe src:', src);
     }
 }
 
-// 点击下一步
+// Click next step
 function clickStepCtrlBtn03() {
     let frame = theTopWindow();
     frame.getElementById("StepCtrlBtn03").children[1].click();
 }
 
-// 点击下一步
+// Click next step
 function clickStepCtrlBtn04() {
     let frame = theTopWindow();
     frame.getElementById("StepCtrlBtn04").children[1].click();
 }
 
-// 拉起信用卡支付
+// Trigger credit card payment
 function openPayment() {
     let frame = theTopWindow();
     frame.getElementById("rdoPays2").click();
@@ -188,36 +188,36 @@ function openPayment() {
     frame.getElementById("StepCtrlBtn05").children[1].click();
 }
 
-// 断言锁定成功 下一步按钮显示
+// Assert lock success, next step button shown
 function assertLockSuccess() {
     let frame = theTopWindow();
     const el = frame.querySelector('#StepCtrlBtn03');
     if (el && el.style.display === 'block') {
-        console.log('✅ class 正确：m03 on');
+        console.log('✅ class correct: m03 on');
         return true;
     } else {
-        console.log('❌ class 不匹配');
+        console.log('❌ class mismatch');
         return false;
     }
 }
 
-//选内场/看台 
+//Select floor/stands area
 function selectRange(idx) {
     if (isSuccess) {
         return;
     }
     let frame = theFrame();
     if (idx == 1) {
-        // 看台页面
+        // Stands page
         if (frame.getElementById("grade_지정석")) {
             let gradeElement = frame.getElementById("grade_지정석");
-            // 检查元素是否存在，并且其 class 列表中不包含 'ov'
+            // Check if the element exists and its class list does not contain 'ov'
             if (gradeElement && !gradeElement.classList.contains("ov")) {
                 gradeElement.click();
             }
         }
     } else {
-        // 内场页面
+        // Floor page
         if (frame.getElementById("grade_스탠딩")) {
             frame.getElementById("grade_스탠딩").click()
             currentSeatLayer = 2;
@@ -229,9 +229,9 @@ async function enterPage(block) {
     let frame = theFrame();
     let seatLayer = frame.getElementsByClassName("seat_layer");
 
-    // 检查seatLayer是否存在且不为空
+    // Check if seatLayer exists and is not empty
     if (!seatLayer || seatLayer.length === 0) {
-        // 如果block为1开头为内场 打开内场page
+        // If block starts with 1, it's the floor area, open the floor page
         if (block.toString().startsWith("1")) {
             selectRange(1);
             await sleep(300);
@@ -242,7 +242,7 @@ async function enterPage(block) {
         }
     }
 
-    // 遍历找到block
+    // Iterate to find the block
     frame = theFrame();
     let seatLayerChildren = frame.getElementsByClassName("seat_layer")[0].children;
     for (let i = 0; i < seatLayerChildren.length; i++) {
@@ -253,7 +253,7 @@ async function enterPage(block) {
             return;
         }
     }
-    // 如果遍历完没有找到block，说明在另一个page
+    // If block is not found after iterating, it must be on another page
     if (block.toString().startsWith("1")) {
         selectRange(2);
         await sleep(300);
@@ -274,14 +274,14 @@ async function enterPage(block) {
     }
 }
 
-// 接口锁定后 选择座位 去支付
+// After the API lock succeeds, select the seat and go to payment
 async function chooseSeatAndGotoPayment(block, seatId) {
     await enterPage(block);
     await sleep(400);
     let frame = theFrame();
     let seat = frame.getElementById("t" + seatId.toString());
     if (seat && !seat.className.includes("s13")) {
-        // 如果seat的class不包含son，则点击 son说明已选中
+        // If the seat's class doesn't contain "son", click it; "son" means it's already selected
         if (!seat.className.includes("son")) {
             seat.click();
         }
@@ -294,14 +294,14 @@ async function chooseSeatAndGotoPayment(block, seatId) {
 }
 // endregion
 
-//region 接口操作
+//region API Operations
 
 async function sendSearchSeatRequest(block) {
-    console.log(`[DEBUG] 开始发送请求，区块: ${block}`);
+    console.log(`[DEBUG] Sending request, block: ${block}`);
 
-    // 检查必要参数
+    // Check required parameters
     if (!concertcfg.idHall || !concertcfg.idTime || !concertcfg.idCustomer) {
-        console.error('[DEBUG] 缺少必要参数:', {
+        console.error('[DEBUG] Missing required parameters:', {
             idHall: concertcfg.idHall,
             idTime: concertcfg.idTime,
             idCustomer: concertcfg.idCustomer
@@ -312,7 +312,7 @@ async function sendSearchSeatRequest(block) {
     const url = 'https://ticket.yes24.com/OSIF/Book.asmx/GetBookWholeFN';
     let cookie = getCookie();
 
-    console.log(`[DEBUG] Cookie长度: ${cookie ? cookie.length : 0}`);
+    console.log(`[DEBUG] Cookie length: ${cookie ? cookie.length : 0}`);
     console.log(`[DEBUG] URL: ${url}`);
 
     const targetUrl = url;
@@ -342,7 +342,7 @@ async function sendSearchSeatRequest(block) {
         idOrg: '1'
     });
 
-    console.log(`[DEBUG] 请求体:`, body.toString());
+    console.log(`[DEBUG] Request body:`, body.toString());
 
     const headers = {
         'Host': 'ticket.yes24.com',
@@ -358,7 +358,7 @@ async function sendSearchSeatRequest(block) {
         'Cookie': cookie
     };
 
-    console.log(`[DEBUG] 准备发送fetch请求...`);
+    console.log(`[DEBUG] Preparing to send fetch request...`);
 
     try {
         const response = await fetch(url, {
@@ -367,11 +367,11 @@ async function sendSearchSeatRequest(block) {
             body: body
         });
         const data = await response.text();
-        console.log(`[DEBUG] 响应数据长度:`, data.length);
+        console.log(`[DEBUG] Response data length:`, data.length);
         parseResponse(data);
-        console.log(`[YES24 info] Block ${block} 请求成功`);
+        console.log(`[YES24 info] Block ${block} request succeeded`);
     } catch (error) {
-        console.error(`[YES24 Error] Block ${block} 请求失败:`, error);
+        console.error(`[YES24 Error] Block ${block} request failed:`, error);
     } finally {
         chrome.runtime.sendMessage({ action: 'removeRefererRule' }, response => {
             if (response && response.success) {
@@ -388,12 +388,12 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
         return;
     }
 
-    console.log(`[DEBUG] 开始发送Lock请求，区块: ${block} 座位ID: ${seatId}`);
+    console.log(`[DEBUG] Sending Lock request, block: ${block} seatId: ${seatId}`);
 
     const url = 'https://ticket.yes24.com/OSIF/Book.asmx/Lock';
     let cookie = getCookie();
 
-    console.log(`[DEBUG] Cookie长度: ${cookie ? cookie.length : 0}`);
+    console.log(`[DEBUG] Cookie length: ${cookie ? cookie.length : 0}`);
     console.log(`[DEBUG] URL: ${url}`);
 
     const body = new URLSearchParams({
@@ -405,7 +405,7 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
         organizationID: '1'
     });
 
-    console.log(`[DEBUG] 请求体:`, body.toString());
+    console.log(`[DEBUG] Request body:`, body.toString());
 
     const targetUrl = url;
     const refererUrl = `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`
@@ -440,10 +440,10 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
         'Cookie': cookie
     };
 
-    console.log(`[DEBUG] 准备发送fetch请求...`);
+    console.log(`[DEBUG] Preparing to send fetch request...`);
 
     try {
-        // 发送请求
+        // Send request
         const response = await fetch(url, {
             method: 'POST',
             headers: headers,
@@ -451,25 +451,25 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
             credentials: 'include',
         });
         const data = await response.text();
-        console.log(`[DEBUG] Lock响应数据:`, data);
+        console.log(`[DEBUG] Lock response data:`, data);
 
         const codeMatch = data.match(/<Code>(.*?)<\/Code>/);
         const messageMatch = data.match(/<Message>(.*?)<\/Message>/);
         const code = codeMatch ? codeMatch[1] : '';
         const message = messageMatch ? messageMatch[1] : '';
-        console.log(`[DEBUG] Lock响应数据 code: ${code}, message: ${message}`);
+        console.log(`[DEBUG] Lock response data code: ${code}, message: ${message}`);
         if (code === 'None') {
-            isSuccess = true; // 设置成功标志
+            isSuccess = true; // Set success flag
             successBlock = block;
             successId = seatId;
-            console.log(`[YES24 Success] 座位锁定成功: ${seatId}`);
-            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位接口锁定成功: block:${block} seat:${seatId}`);
+            console.log(`[YES24 Success] Seat lock succeeded: ${seatId}`);
+            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Seat API lock succeeded: block:${block} seat:${seatId}`);
         } else if (code === 'block') {
-            console.error(`[YES24 Error] 被block 需要验证码`);
-            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]被block: block:${block} seat:${seatId}`);
+            console.error(`[YES24 Error] Blocked, captcha required`);
+            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Blocked: block:${block} seat:${seatId}`);
             isSuccess = true;
         } else {
-            console.error(`[YES24 Error] 锁定失败: Code=${code}, Message=${message}`);
+            console.error(`[YES24 Error] Lock failed: Code=${code}, Message=${message}`);
 
             if (!seatFailureMap[seatId]) {
                 seatFailureMap[seatId] = 0;
@@ -480,16 +480,16 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
                 const unbanTime = Date.now() + BAN_DURATION;
                 seatBlacklist[seatId] = unbanTime;
                 console.warn(`[Blacklist] Seat ${seatId} failed ${seatFailureMap[seatId]} times. Banned for ${BAN_DURATION} ms.`);
-                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Seat ${seatId} 加入黑名单 (${BAN_DURATION/(1000*60)} 分钟). 失败次数: ${seatFailureMap[seatId]}`);
+                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Seat ${seatId} added to blacklist (${BAN_DURATION/(1000*60)} min). Failure count: ${seatFailureMap[seatId]}`);
             }
 
             if (sendmsg) {
-                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]锁定失败: block:${block} seat:${seatId} Code=${code} Message=${message}`);
+                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Lock failed: block:${block} seat:${seatId} Code=${code} Message=${message}`);
             }
         }
     } catch (error) {
-        console.error(`[YES24 Error] Lock请求失败:`, error);
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]Lock请求失败: block:${block} seat:${seatId} Error=${error.message}`);
+        console.error(`[YES24 Error] Lock request failed:`, error);
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Lock request failed: block:${block} seat:${seatId} Error=${error.message}`);
     } finally {
         chrome.runtime.sendMessage({ action: 'removeRefererRule' }, response => {
             if (response && response.success) {
@@ -502,85 +502,85 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
 }
 
 function parseLayoutData(xmlString) {
-    // 解析Layout数据，提取座位信息
-    console.log(`[DEBUG] 开始解析Layout数据...`);
+    // Parse Layout data, extract seat information
+    console.log(`[DEBUG] Starting to parse Layout data...`);
 
-    // 获取Layout内容
+    // Get Layout content
     const layoutMatch = xmlString.match(/<Layout>(.*?)<\/Layout>/s);
     const layoutData = layoutMatch ? layoutMatch[1] : "";
 
-    let layoutSortById = {}; // 存储座位ID和递增序号的对应关系
+    let layoutSortById = {}; // Stores the mapping of seat ID to incrementing sort index
 
     if (layoutData) {
 
-        // 使用正则表达式匹配所有DIV元素
+        // Use regex to match all DIV elements
         const divRegex = /&lt;DIV[^&]*?&gt;&lt;\/DIV&gt;/g;
         const divMatches = layoutData.match(divRegex);
 
         if (divMatches) {
-            let sortIndex = 1; // 递增序号从1开始
+            let sortIndex = 1; // Incrementing index starts at 1
 
             divMatches.forEach(divHtml => {
-                // 解析每个DIV的属性
+                // Parse each DIV's attributes
                 const idMatch = divHtml.match(/id=([^&\s]+)/);
                 const styleMatch = divHtml.match(/style="([^"]+)"/);
                 const valueMatch = divHtml.match(/value="([^"]+)"/);
 
                 if (idMatch && valueMatch) {
                     let seatId = idMatch[1];
-                    // 存储到layoutSortById对象中，key为座位ID，value为递增序号
+                    // Store into the layoutSortById object, key is seat ID, value is the incrementing index
                     layoutSortById[seatId] = sortIndex;
-                    sortIndex++; // 递增序号
+                    sortIndex++; // Increment index
                 }
             });
 
-            console.log(`[DEBUG] layoutSortById对象:`, layoutSortById);
+            console.log(`[DEBUG] layoutSortById object:`, layoutSortById);
         }
     }
 
-    return layoutSortById; // 添加return语句
+    return layoutSortById; // Added return statement
 }
 
 function parseResponse(xmlString) {
-    // 使用正则表达式解析XML，避免使用DOMParser
+    // Use regex to parse XML, avoiding DOMParser
     let layoutSortById = {};
-    // 先尝试解析Layout数据
+    // First try to parse Layout data
     if (xmlString.includes('<Layout>')) {
         layoutSortById = parseLayoutData(xmlString);
     }
 
-    // 获取 Block 值
+    // Get Block value
     const blockMatch = xmlString.match(/<Block>(.*?)<\/Block>/);
     const blockValue = blockMatch ? blockMatch[1] : null;
 
     if (blockValue === '-1') {
         const delay = Math.floor(Math.random() * 2000) + 1000; // 1000-3000ms
-        console.warn(`[YES24 Warning] Block返回-1 (频率过快)，暂停 ${delay}ms 防止封禁...`);
+        console.warn(`[YES24 Warning] Block returned -1 (rate too high), pausing ${delay}ms to prevent a ban...`);
         needDelay = true;
         return;
     }
 
     if (blockValue === 'deny') {
-        console.error('[YES24 Error]检测到Block值为deny，可能已被封禁！停止刷票。');
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]已被封禁 (Block=deny)，停止刷票！`);
-        isSuccess = true; // 设置成功标志以停止循环（虽然是失败情况，但目的是停下来）
+        console.error('[YES24 Error] Detected Block value = deny, may already be banned! Stopping ticket scanning.');
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Banned (Block=deny), stopping ticket scanning!`);
+        isSuccess = true; // Set success flag to stop the loop (this is actually a failure case, but the goal is to stop)
         return;
     }
-    
-    const block = blockValue; // 继续使用 block 变量名以保持后续代码兼容
+
+    const block = blockValue; // Keep using the "block" variable name for compatibility with the code below
 
 
-    // 获取 BlockSeat 内容
+    // Get BlockSeat content
     const blockSeatMatch = xmlString.match(/<BlockSeat>(.*?)<\/BlockSeat>/);
     const blockSeatData = blockSeatMatch ? blockSeatMatch[1] : "";
 
     if (blockSeatData) {
-        // 使用 ^ 分割每个座位数据
+        // Split each seat's data using ^
         const seats = blockSeatData.split('^');
 
         seats.forEach(seatData => {
             if (seatData.trim()) {
-                // 使用 @ 分割座位信息，第一个是座位ID
+                // Split seat info using @, the first item is the seat ID
                 const seatInfo = seatData.split('@');
                 if (seatInfo.length > 0) {
                     const seatId = seatInfo[0];
@@ -605,12 +605,12 @@ function parseResponse(xmlString) {
                         if (seatQueue.length > 2) {
                             return;
                         }
-                        // sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]刷到座位 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
+                        // sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Found seat block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
                         sendedIdList[seatId] = true;
                     }
-                    // 检查是否站票超过ID最大值
+                    // Check if standing ticket exceeds the max ID
                     // if (seatElementIdx && seatElementIdx > MAX_SEAT_ID && block.toString().startsWith("1")) {
-                    //     // sendFeiShuMsg(WEBHOOK_URL, `站票超过ID最大值，不锁票 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
+                    //     // sendFeiShuMsg(WEBHOOK_URL, `Standing ticket exceeds max ID, not locking block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
                     //     return;
                     // }
 
@@ -619,9 +619,9 @@ function parseResponse(xmlString) {
                             if (seatQueue.length > 2) {
                                 return;
                             }
-                            console.log(`[YES24 info] chooseable==0 发现空座，直接接口锁定: block:${block} seat:${seatId},index:${seatElementIdx},seatInfo:${seatInfo}`);
+                            console.log(`[YES24 info] chooseable==0, found an empty seat, locking directly via API: block:${block} seat:${seatId},index:${seatElementIdx},seatInfo:${seatInfo}`);
                             addSeatToQueue(seat);
-                            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]刷到空座，直接接口锁定 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
+                            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Found an empty seat, locking directly via API block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
                         }
                     }
                 }
@@ -632,11 +632,11 @@ function parseResponse(xmlString) {
 // endregion
 
 
-// 独立的异步任务：模拟用户随机行为
+// Standalone async task: simulate random user behavior
 async function startAntiBanSimulation() {
-    console.log('[Anti-Ban] 启动随机行为模拟协程');
+    console.log('[Anti-Ban] Starting random behavior simulation coroutine');
     while (botRunning && !isSuccess) {
-        // 随机等待 2-10 秒执行一次动作，避免过于频繁
+        // Randomly wait 2-10 seconds before performing an action, to avoid being too frequent
         const waitTime = Math.floor(Math.random() * 4000) + 2000;
         await sleep(waitTime);
 
@@ -644,8 +644,8 @@ async function startAntiBanSimulation() {
 
         const actionType = Math.floor(Math.random() * 3);
         if (actionType === 0) {
-            // 模拟鼠标移动
-            console.log('[Anti-Ban] 模拟鼠标移动');
+            // Simulate mouse movement
+            console.log('[Anti-Ban] Simulating mouse movement');
             const x = Math.floor(Math.random() * window.innerWidth);
             const y = Math.floor(Math.random() * window.innerHeight);
             const event = new MouseEvent('mousemove', {
@@ -657,8 +657,8 @@ async function startAntiBanSimulation() {
             });
             document.dispatchEvent(event);
         } else if (actionType === 1) {
-            // 模拟点击空白处
-            console.log('[Anti-Ban] 模拟点击空白处');
+            // Simulate clicking on empty space
+            console.log('[Anti-Ban] Simulating click on empty space');
             const x = Math.floor(Math.random() * window.innerWidth);
             const y = Math.floor(Math.random() * window.innerHeight);
             const event = new MouseEvent('click', {
@@ -670,24 +670,24 @@ async function startAntiBanSimulation() {
             });
             document.body.dispatchEvent(event);
         } else {
-            // 模拟页面滚动
-            console.log('[Anti-Ban] 模拟页面滚动');
-            const scrollAmount = Math.floor(Math.random() * 200) - 100; // 向上或向下滚动
+            // Simulate page scroll
+            console.log('[Anti-Ban] Simulating page scroll');
+            const scrollAmount = Math.floor(Math.random() * 200) - 100; // Scroll up or down
             window.scrollBy({ top: scrollAmount, behavior: 'smooth' });
         }
     }
-    console.log('[Anti-Ban] 停止随机行为模拟');
+    console.log('[Anti-Ban] Stopping random behavior simulation');
 }
 
-//region 主流程
-// producer：搜索可用座位添加到列表
+//region Main Flow
+// producer: search for available seats and add them to the list
 async function searchSeat() {
     getUserInfo();
 
     let i = 0;
     let loopCount = 0;
     await sleep(1000);
-    // 一直循环遍历blockSelect
+    // Continuously loop through blockSelect
     while (botRunning && !isSuccess) {
         if (seatQueue.length > 0) {
             await sleep(50);
@@ -697,26 +697,26 @@ async function searchSeat() {
             break;
         }
 
-        // 一直循环遍历blockSelect
+        // Continuously loop through blockSelect
         sendSearchSeatRequest(blockSelect[i]);
         i = (i + 1) % blockSelect.length;
 
-        // 基础随机延时：在 SINGLE_REQUEST_INTERVAL 基础上增加 50-150ms 的波动
+        // Base random delay: add 50-150ms of jitter on top of SINGLE_REQUEST_INTERVAL
         let randomDelay = Math.floor(Math.random() * 300) + 50;
         await sleep(SINGLE_REQUEST_INTERVAL + randomDelay);
 
         loopCount++;
-        // 每 15-30 次请求，进行一次较长时间的“休息”（1-3秒），模拟人类行为
+        // Every 15-30 requests, take a longer "rest" (1-3 seconds) to simulate human behavior
         if (loopCount % (Math.floor(Math.random() * 15) + 15) === 0 || needDelay) {
             needDelay = false;
             let longRest = Math.floor(Math.random() * 2000) + 1000;
-            console.log(`[Anti-Ban] 模拟用户休息，暂停 ${longRest}ms`);
+            console.log(`[Anti-Ban] Simulating user rest, pausing ${longRest}ms`);
             await sleep(longRest);
         }
     }
 }
 
-// consumer：从列表中获取座位并尝试锁定
+// consumer: get a seat from the list and attempt to lock it
 function resetRuntimeState() {
     isSuccess = false;
     currentSeatLayer = null;
@@ -738,8 +738,8 @@ async function main(startConfig) {
     concertId = getConcertId();
     let data = startConfig || await get_stored_value(concertId);
     if (!data) {
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]获取演出信息失败`);
-        console.log('❌ 获取演出信息失败');
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Failed to get concert info`);
+        console.log('❌ Failed to get concert info');
         return;
     }
     WEBHOOK_URL = data["feishu-bot-id"];
@@ -748,13 +748,13 @@ async function main(startConfig) {
     blockSelect = data.section
     console.log(blockSelect);
     if (!concertcfg.idCustomer) {
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]YES24 用户 ID 为空，请先在 YES24 配置页填写`);
-        console.log('❌ YES24 用户 ID 为空，请先在 YES24 配置页填写');
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] YES24 User ID is empty, please fill it in on the YES24 config page first`);
+        console.log('❌ YES24 User ID is empty, please fill it in on the YES24 config page first');
         return;
     }
     if (blockSelect.length == 0) {
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位区域为空，请配置座位区域`);
-        console.log('❌ 座位区域为空，请配置座位区域');
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Seat area is empty, please configure the seat area`);
+        console.log('❌ Seat area is empty, please configure the seat area');
         return;
     }
     await sleep(3000);
@@ -763,16 +763,16 @@ async function main(startConfig) {
         return;
     }
     if (!hasDate) {
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]日期选择失败 请手动选择日期`);
-        console.log('❌ 日期选择失败 请手动选择日期');
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Date selection failed, please select the date manually`);
+        console.log('❌ Date selection failed, please select the date manually');
     }
     // while(!assertSeatPageOpen()){
     //     await sleep(500);
     // }
     await sleep(3000);
-    searchSeat(); // 启动爬虫
+    searchSeat(); // Start the crawler
     selectRange(1);
-    // 启动并行的随机行为模拟任务（不await，让它在后台跑）
+    // Start the parallel random behavior simulation task (not awaited, let it run in the background)
     startAntiBanSimulation();
     while (botRunning && !isSuccess) {
         if (seatQueue.length > 0) {
@@ -786,9 +786,9 @@ async function main(startConfig) {
             await sleep(50);
         }
     }
-    // 接口锁成功的处理一下选座
+    // Handle seat selection after the API lock succeeds
     if (successBlock && successId) {
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]抢票成功 successBlock:${successBlock} successId:${successId}`);
+        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Ticket grab succeeded successBlock:${successBlock} successId:${successId}`);
         await chooseSeatAndGotoPayment(successBlock, successId);
         await sleep(1000);
         clickStepCtrlBtn03();
@@ -867,7 +867,7 @@ startFromRunState();
 // endregion
 
 
-// region 测试
+// region Test
 function testAddSeatToQueue(block, seatId) {
     let seat = {};
     seat.id = seatId;

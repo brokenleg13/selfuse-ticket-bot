@@ -1,11 +1,11 @@
-let seatSelect = []; // 没用 todo:增加自定义选座
-let blockSelect = [101,102,103,104,105,106,306,307,308,318,317,316]; // 自定义选区
-let blackList = []; // 黑名单字典
-let SEAT_MAX_CLICK_COUNT = 5; // 座位最大点击次数
-let currentLoopCount = 0; // 当前循环次数 用于清除黑名单
-let CLEAR_BLACK_LIST_COUNT = 10; // 清除黑名单次数
-let WEBHOOK_URL = ''; // 飞书webhook url
-window.isSuccess = false; // 是否成功
+let seatSelect = []; // unused todo: add custom seat selection
+let blockSelect = [101,102,103,104,105,106,306,307,308,318,317,316]; // custom selected blocks
+let blackList = []; // blacklist dictionary
+let SEAT_MAX_CLICK_COUNT = 5; // max click count per seat
+let currentLoopCount = 0; // current loop count, used to clear the blacklist
+let CLEAR_BLACK_LIST_COUNT = 10; // number of loops after which to clear the blacklist
+let WEBHOOK_URL = ''; // Feishu webhook URL
+window.isSuccess = false; // whether it succeeded
 
 function getConcertId() {
     let url = window.location.href;
@@ -19,7 +19,7 @@ function TampermonkeyClick() {
 
 function sendFeiShuMsg(msg) {
     if (!WEBHOOK_URL) {
-        console.log("WEBHOOK_URL未设置");
+        console.log("WEBHOOK_URL not set");
         return;
     }
     const payload = {
@@ -37,8 +37,8 @@ function sendFeiShuMsg(msg) {
     body: JSON.stringify(payload)
     })
     .then(res => res.json())
-    .then(json => console.log('结果:', json))
-    .catch(err => console.error('错误:', err));
+    .then(json => console.log('Result:', json))
+    .catch(err => console.error('Error:', err));
 
 }
 
@@ -93,7 +93,7 @@ function clickStepCtrlBtn04() {
     frame.getElementById("StepCtrlBtn04").children[1].click();
 }
 
-// 拉起信用卡支付
+// Bring up credit card payment
 function openPayment() {
     let frame = theTopWindow();
     frame.getElementById("rdoPays2").click();
@@ -102,15 +102,15 @@ function openPayment() {
     frame.getElementById("StepCtrlBtn05").children[1].click();
 }
 
-// 断言锁定成功
+// Assert lock success
 function assertLockSuccess() {
     let frame = theTopWindow();
     const el = frame.querySelector('#StepCtrlBtn03');
     if (el && el.style.display === 'block') {
-        console.log('✅ class 正确：m03 on');
+        console.log('✅ class correct: m03 on');
         window.isSuccess = true;
     } else {
-        console.log('❌ class 不匹配');
+        console.log('❌ class mismatch');
     }
 }
 
@@ -120,9 +120,9 @@ async function getSeat() {
     for (let i = 0; i < seatArray.length; i++) {
         let seat = seatArray[i];
         if (!seat.className.includes("s13") && !blackList.includes(seat.id)) {
-            // 获取seat的ID
+            // Get the seat's ID
             let seatId = seat.id;
-            // 尝试锁定座位
+            // Try to lock the seat
             for (let j = 0; j < SEAT_MAX_CLICK_COUNT; j++) {
                 let frameNew = theFrame();
                 let seatArrayNew = frameNew.getElementById("divSeatArray").children;
@@ -137,7 +137,7 @@ async function getSeat() {
                 }
                 await sleep(300);
             }
-            // 如果超过次数锁定失败，则加入黑名单
+            // If locking fails after the max number of attempts, add to the blacklist
             blackList.push(seatId);
             return false;
         }
@@ -154,7 +154,7 @@ async function findSeat() {
     for (let i = 0; i < blockChildren.length; i++) {
         let block = blockChildren[i];
         let blockText = block.textContent;
-        // 如果文本包含blockSelect中的数字，则点击
+        // If the text contains a number from blockSelect, click it
         if (blockSelect.some(item => blockText.includes(item))) {
             block.click();
             await sleep(500);
@@ -196,21 +196,21 @@ async function searchSeat() {
     console.log("search seat");
     await sleep(1000);
 
-    // 当isSuccess为true时立刻结束循环
+    // End the loop immediately once isSuccess becomes true
     while (!window.isSuccess) {
-        // 交替选择1和2
+        // Alternate between selecting 1 and 2
         await selectRange(1);
         await findSeat();
         await selectRange(2);
         await findSeat();
-        // 循环10次清除黑名单
+        // Clear the blacklist every 10 loops
         currentLoopCount++;
         if (currentLoopCount >= CLEAR_BLACK_LIST_COUNT) {
             blackList = [];
             currentLoopCount = 0;
         }
     }
-    sendFeiShuMsg("抢票成功");
+    sendFeiShuMsg("Ticket grab succeeded");
     await sleep(1000);
     clickStepCtrlBtn03();
     await sleep(2000);

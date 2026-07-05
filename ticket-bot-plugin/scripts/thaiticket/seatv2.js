@@ -1,16 +1,16 @@
-/*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
-let blockSelect = ["A2"]; // 自定义选区
-let WEBHOOK_URL = ''; // 飞书webhook url
-let REFRESH_INTERVAL = 1000; // 刷新时间间隔 根据网络调整
-let GROUP_NUM = 2; // 连坐数，>1时只找连坐锁
-let TIMEOUT = 5000; // 等待锁票超时时间
-let MAX_LOCK_ATTEMPTS = 1; // 最大锁票尝试次数
-let TARGET_GROUP_COUNT = 3; // 每次刷新尝试锁定座位组数
-let ROW_PCT_MIN = 0;    // "中心"排数下限百分比
-let ROW_PCT_MAX = 20;   // "中心"排数上限百分比
-let COL_PCT_MIN = 0;   // "中心"列下限百分比
-let COL_PCT_MAX = 50;   // "中心"列上限百分比
-let SIDEWAYS_ZONES = []; // 侧面舞台区域
+/*--------------------------------- Custom configuration, USERID required ---------------------------------*/
+let blockSelect = ["A2"]; // Custom zone selection
+let WEBHOOK_URL = ''; // Feishu webhook URL
+let REFRESH_INTERVAL = 1000; // Refresh interval, adjust based on network conditions
+let GROUP_NUM = 2; // Number of adjacent seats; if >1, only look for adjacent-seat locks
+let TIMEOUT = 5000; // Timeout for waiting on seat lock
+let MAX_LOCK_ATTEMPTS = 1; // Maximum number of seat lock attempts
+let TARGET_GROUP_COUNT = 3; // Number of seat groups to try locking per refresh
+let ROW_PCT_MIN = 0;    // Lower bound percentage for "center" row
+let ROW_PCT_MAX = 20;   // Upper bound percentage for "center" row
+let COL_PCT_MIN = 0;   // Lower bound percentage for "center" column
+let COL_PCT_MAX = 50;   // Upper bound percentage for "center" column
+let SIDEWAYS_ZONES = []; // Side-stage zones
 
 let STRATEGY1_ENABLED = true;
 let STRATEGY2_ENABLED = true;
@@ -24,15 +24,15 @@ let leftBlock = ["A1","B1","C1"];
 let rightBlock = ["A2","B3","C2"];
 
 
-/*--------------------------------- 勿修改 ---------------------------------*/
-let isSuccess = false; // 是否成功
+/*--------------------------------- Do not modify ---------------------------------*/
+let isSuccess = false; // Whether it succeeded
 let successZone = "";
 let successSeat = null;
 let successId = "";
 let successNum = 0;
 let failedNum = 0;
-let seatQueue = []; // 可选座位队列
-let secondSeatQueue = []; // 次要座位队列
+let seatQueue = []; // Queue of selectable seats
+let secondSeatQueue = []; // Secondary seat queue
 
 // --- Main Data Structure ---
 let virtualZoneMap = []; // The complete 2D map of the zone
@@ -45,7 +45,7 @@ let botRunning = false;
 let mainLoopInterval;
 
 
-// region 页面操作
+// region Page operations
 function theFrame() {
     return window.frames[0].document;
 }
@@ -54,7 +54,7 @@ function theTopWindow() {
     return window.document;
 }
 
-// 获取cookie
+// Get cookie
 function getCookie() {
     let frame = theTopWindow();
     return frame.cookie;
@@ -370,7 +370,7 @@ function getGroupSeats(zone) {
 
 //endregion
 
-//region 接口操作
+//region API operations
 async function getFixedPage(k, zone, round) {
     const url = `https://booking.thaiticketmajor.com/booking/3m/fixed.php?k=${k}&zone=${zone}&round=${round}`;
     let cookie = getCookie();
@@ -526,7 +526,7 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
         'X-Requested-With': 'XMLHttpRequest',
         'Cookie': cookie
     };
-    //DB-02-P*3000 *分割
+    //DB-02-P*3000, split by *
     let seatlist = "";
     let pricelist = "";
     let seatklist = "";
@@ -541,7 +541,7 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
     // console.log("seatklist", seatklist);
     const body = new URLSearchParams({
         'ehId': paymentFormParams.ehId,
-        'curentdate': paymentFormParams.curentdate, // 注意: 这个值可能需要动态生成
+        'curentdate': paymentFormParams.curentdate, // Note: this value may need to be generated dynamically
         'max_payment': paymentFormParams.max_payment,
         'payment_cnt': paymentFormParams.payment_cnt,
         'paytype': paymentFormParams.paytype,
@@ -558,7 +558,7 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
         'travelChild2': paymentFormParams.travelChild2,
         'travelChild2':paymentFormParams.travelChild2,
         'enroll_val': paymentFormParams.enroll_val,
-        'dval': paymentFormParams.dval, // 注意: 这个值可能是用户标识
+        'dval': paymentFormParams.dval, // Note: this value may be a user identifier
         'companyid': paymentFormParams.companyid,
         'ks': paymentFormParams.ks,
         'inclvat': paymentFormParams.inclvat,
@@ -582,9 +582,9 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
         console.log("[Thaiticket] Lock response:", data);
         if (data.result) {
             isSuccess = true;
-            console.log("[Thaiticket] 锁票成功");
+            console.log("[Thaiticket] Seat lock succeeded");
             if (WEBHOOK_URL) {
-                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]抢票成功 successBlock:${paymentFormParams.zone} successSeat:${seatlist}`);
+                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]Ticket grab succeeded successBlock:${paymentFormParams.zone} successSeat:${seatlist}`);
             }
         }
         return data;
@@ -605,7 +605,7 @@ async function sendLockRequest(seatInfoList,paymentFormParams) {
 // endregion
 
 // main
-// consumer：从列表中获取座位并尝试锁定
+// consumer: get seats from the list and try to lock them
 async function tryLockSeat(seatsToLock, paymentFormParams) {
     // Reset counters for this attempt
     successNum = 0;
@@ -627,16 +627,16 @@ async function tryLockSeat(seatsToLock, paymentFormParams) {
         await sendLockRequest(seatsToLock, paymentFormParams);
     }
 
-    // 如果尝试锁定失败（成功的票数小于期望的票数），则记录失败
+    // If the lock attempt failed (the number of successful tickets is less than the expected number), record the failure
     if (successNum < seatsToLock.length) {
         const groupKey = seatsToLock.map(s => s.seatk).sort().join(',');
         const currentFailures = (seatGroupFailureCount.get(groupKey) || 0) + 1;
         seatGroupFailureCount.set(groupKey, currentFailures);
-        console.log(`[Thaiticket] 座位组 ${groupKey} 锁定失败。失败次数: ${currentFailures}`);
+        console.log(`[Thaiticket] Seat group ${groupKey} lock failed. Failure count: ${currentFailures}`);
 
         if (currentFailures >= MAX_LOCK_ATTEMPTS) {
             seatGroupBlacklist.add(groupKey);
-            console.log(`[Thaiticket] 座位组 ${groupKey} 因失败 ${currentFailures} 次已被加入黑名单。`);
+            console.log(`[Thaiticket] Seat group ${groupKey} has been blacklisted after ${currentFailures} failures.`);
         }
     }
 }
@@ -649,7 +649,7 @@ async function mainLoop() {
     initEnv();
 
     try {
-        while(botRunning) { // 添加 while 循环
+        while(botRunning) { // Added while loop
             if (!botRunning) break;
 
             for (const zone of blockSelect) {
@@ -663,8 +663,8 @@ async function mainLoop() {
                 }
 
                 if (data.includes("您的请求暂时不能处理")) {
-                    console.error("[Thaiticket] 检测到 '您的请求暂时不能处理'。可能需要输入验证码。机器人停止。");
-                    await sendFeiShuMsg("Thaiticket Bot: 检测到 '您的请求暂时不能处理'，可能需要验证码。机器人已停止，请检查页面。");
+                    console.error("[Thaiticket] Detected the message 'your request cannot be processed right now'. A CAPTCHA may be required. Bot stopped.");
+                    await sendFeiShuMsg("Thaiticket Bot: Detected the message 'your request cannot be processed right now', a CAPTCHA may be required. The bot has stopped, please check the page.");
                     stopBot();
                     return; // Exit mainLoop
                 }
@@ -719,18 +719,18 @@ async function startBot(config) {
     let ticketTime = config.ticketTime || "";
     let currentUrl = window.location.href;
     if (currentUrl.includes(ticketUrl)) {
-        console.log("[Thaiticket] 当前页面是开票详情页，开始轮询获取开票链接。");
+        console.log("[Thaiticket] Current page is the ticket release detail page, starting to poll for the ticket release link.");
         let url = await searchConcert(ticketUrl, ticketTime);
         if (url) {
-            console.log("[Thaiticket] 成功获取到开票链接:", url);
-            window.location.href = url; // 跳转到开票链接
+            console.log("[Thaiticket] Successfully obtained the ticket release link:", url);
+            window.location.href = url; // Navigate to the ticket release link
             return;
         } else {
-            console.log("[Thaiticket] 轮询超时，未能获取到开票链接。");
+            console.log("[Thaiticket] Polling timed out, failed to obtain the ticket release link.");
             return;
         }
     } else {
-        console.log("[Thaiticket] 当前页面不是开票详情页，开始抢票。");
+        console.log("[Thaiticket] Current page is not the ticket release detail page, starting to grab tickets.");
     }
 
     if (config) {
