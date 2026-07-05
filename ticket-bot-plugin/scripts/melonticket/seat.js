@@ -56,7 +56,10 @@ function clickOnArea(area) {
 
 async function findSeat() {
     let frame = theFrame();
-    let canvas = frame.document.getElementById("ez_canvas");
+    let canvas = await waitForElement(frame.document, "ez_canvas");
+    if (!canvas) {
+        return false;
+    }
     let seat = canvas.getElementsByTagName("rect");
     await sleep(750);
     for (let i = 0; i < seat.length; i++) {
