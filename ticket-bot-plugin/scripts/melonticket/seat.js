@@ -9,8 +9,18 @@ function theFrame() {
     if (window._theFrameInstance == null) {
       window._theFrameInstance = document.getElementById('oneStopFrame').contentWindow;
     }
-  
+
     return window._theFrameInstance;
+}
+
+async function waitForElement(doc, id, timeoutMs = 3000, intervalMs = 100) {
+    const deadline = Date.now() + timeoutMs;
+    let element = doc.getElementById(id);
+    while (!element && Date.now() < deadline) {
+        await sleep(intervalMs);
+        element = doc.getElementById(id);
+    }
+    return element;
 }
 
 function getConcertId() {
@@ -58,7 +68,10 @@ async function findSeat() {
             var clickEvent = new Event('click', { bubbles: true });
 
             seat[i].dispatchEvent(clickEvent);
-            frame.document.getElementById("nextTicketSelection").click();
+            let nextBtn = await waitForElement(frame.document, "nextTicketSelection");
+            if (nextBtn) {
+                nextBtn.click();
+            }
             return true;
         }
     }
@@ -73,7 +86,10 @@ async function checkCaptchaFinish() {
     }
     let frame = theFrame();
     await sleep(500);
-    frame.document.getElementById("nextTicketSelection").click();
+    let nextBtn = await waitForElement(frame.document, "nextTicketSelection");
+    if (nextBtn) {
+        nextBtn.click();
+    }
     return;
 }
 
