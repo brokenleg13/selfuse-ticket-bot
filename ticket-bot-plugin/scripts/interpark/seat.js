@@ -82,16 +82,16 @@
         }
 
         const parts = [
-            seat.seatGrade && `Grade ${seat.seatGrade}`,
-            seat.block && `Zone ${seat.block}`,
-            seat.floor && `Floor ${seat.floor}`,
-            seat.visualRow && `Visual row ${seat.visualRow}`,
-            seat.rowNo && !seat.visualRow && `Row ${seat.rowNo}`,
-            seat.seatNo && `Seat ${seat.seatNo}`,
+            seat.seatGrade && `等级 ${seat.seatGrade}`,
+            seat.block && `区域 ${seat.block}`,
+            seat.floor && `楼层 ${seat.floor}`,
+            seat.visualRow && `视觉排 ${seat.visualRow}`,
+            seat.rowNo && !seat.visualRow && `排 ${seat.rowNo}`,
+            seat.seatNo && `座位 ${seat.seatNo}`,
         ].filter(Boolean);
 
         if (parts.length) {
-            return parts.join(", ");
+            return parts.join("，");
         }
 
         return normalizeText(seat.title || seat.text || "");
@@ -102,11 +102,11 @@
             .filter(Boolean)
             .map(formatSeatBrief)
             .filter(Boolean);
-        return list.length ? list.join("; ") : "No specific seat number found";
+        return list.length ? list.join("；") : "未读取到具体座位号";
     }
 
     function notifySelectedSeats(prefix, seats) {
-        notifyFeishu(`${prefix}: ${formatSeatList(seats)}`);
+        notifyFeishu(`${prefix}：${formatSeatList(seats)}`);
     }
 
     async function pauseBotWithNotification(message) {
@@ -115,7 +115,7 @@
         await markRunStateStopped();
         setBotState(BOT_STATE.STOPPED);
         updateStatus(message);
-        notifyFeishu(`Interpark paused: ${message}`);
+        notifyFeishu(`Interpark 已暂停：${message}`);
     }
 
     function setBotState(nextState, detail) {
@@ -2494,9 +2494,9 @@
                         updateStatus(`captchSlider snapshot save failed: ${error && error.message || error}`);
                     }
                     const sliderReason = captchaOcrState.lastSliderError
-                        ? `Automatic slider handling failed: ${captchaOcrState.lastSliderError}`
-                        : "Automatic slider handling failed";
-                    await pauseBotWithNotification(`Area ${code} seat map API returned CaptchaOpen and captchSlider appeared on the page; paused. ${sliderReason}`);
+                        ? `滑块自动处理失败：${captchaOcrState.lastSliderError}`
+                        : "滑块自动处理失败";
+                    await pauseBotWithNotification(`区域 ${code} 的座位图接口返回 CaptchaOpen，且页面出现 captchSlider，已暂停。${sliderReason}`);
                     return {
                         entry,
                         detail,
@@ -2565,7 +2565,7 @@
             return false;
         }
         await delay(800);
-        updateStatus(`Clicked area ${entry.code} (${entry.count || 0} seats).`);
+        updateStatus(`Clicked area ${entry.code} (${entry.count || 0} 座).`);
         return true;
     }
 
@@ -2718,7 +2718,7 @@
             return "No seat summary found";
         }
 
-        return summary.map(item => `${item.grade}: ${item.count} seats`).join(" | ");
+        return summary.map(item => `${item.grade}: ${item.count} 座`).join(" | ");
     }
 
     function ensureStatusPanel() {
@@ -2838,7 +2838,7 @@
             if (result.areaResult && result.areaResult.selected) {
                 setBotState(BOT_STATE.SELECTED);
                 const selectedArea = result.areaResult.clicked[0] && result.areaResult.clicked[0].code;
-                notifySelectedSeats(`Interpark selected a seat in area ${selectedArea || "-"}; proceeding to next step`, lockedSeatContext && lockedSeatContext.selected);
+                notifySelectedSeats(`Interpark 已选中区域 ${selectedArea || "-"} 的座位，进入下一步`, lockedSeatContext && lockedSeatContext.selected);
                 await markRunStateStopped();
                 botRunning = false;
                 return;
@@ -2853,7 +2853,7 @@
                 const firstSeat = lockedSeatContext && lockedSeatContext.firstSeat;
                 updateStatus(`Seat locked${firstSeat ? ` (${firstSeat.block || ""} ${firstSeat.seatNo || ""})` : ""}; stopped refresh/lock loop.`);
                 if (firstSeat) {
-                    notifySelectedSeats("Interpark seat lock succeeded", lockedSeatContext && lockedSeatContext.selected || [firstSeat]);
+                    notifySelectedSeats("Interpark 锁座成功", lockedSeatContext && lockedSeatContext.selected || [firstSeat]);
                 }
                 await markRunStateStopped();
                 botRunning = false;

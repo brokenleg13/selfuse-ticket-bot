@@ -11,7 +11,7 @@ document.addEventListener("include-html-loaded", function() {
     const customerRow = document.createElement("div");
     customerRow.className = "form-row";
     customerRow.innerHTML = `
-        <label for="customer-id">YES24 User ID</label>
+        <label for="customer-id">YES24 用户 ID</label>
         <input type="text" id="customer-id" name="customer-id" placeholder="YES24 idCustomer">
     `;
 

@@ -19,7 +19,7 @@ function getBookingValue(booking, key, fallback) {
     return value === undefined || value === null || value === "" ? fallback : value;
 }
 
-const platformIdParams = { melon: "prodId", yes24: "IdPerf" };
+const platformIdParams = { melon: "prodId" };
 
 function extractIdFromUrl(value, paramName) {
     const trimmed = (value || "").toString().trim();
@@ -44,7 +44,7 @@ let loadAutoBooking = async () => {
     listContainer.innerHTML = "";
 
     if (!autoBooking || autoBooking.length < 1) {
-        listContainer.textContent = "No auto-booking configurations yet";
+        listContainer.textContent = "暂无自动抢票配置";
         return;
     }
 
@@ -96,16 +96,16 @@ function createConcertItem(booking, index) {
     concertName.textContent = booking["concert-name"] || "";
 
     let concertId = document.createElement("p");
-    concertId.textContent = `Show link/ID: ${booking["concert-id"] || ""}`;
+    concertId.textContent = `演出链接/ID: ${booking["concert-id"] || ""}`;
 
     let date = document.createElement("p");
-    date.textContent = `Date: ${booking.date || ""}`;
+    date.textContent = `日期: ${booking.date || ""}`;
 
     let time = document.createElement("p");
-    time.textContent = `Time: ${booking.time || ""}`;
+    time.textContent = `时间: ${booking.time || ""}`;
 
     let section = document.createElement("p");
-    section.textContent = `Section: ${Array.isArray(booking.section) ? booking.section.join(", ") : ""}`;
+    section.textContent = `区域: ${Array.isArray(booking.section) ? booking.section.join(", ") : ""}`;
 
     concertInfo.appendChild(concertName);
     concertInfo.appendChild(concertId);
@@ -115,21 +115,21 @@ function createConcertItem(booking, index) {
 
     if (booking.platform === "interpark") {
         let polling = document.createElement("p");
-        polling.textContent = `Polling: every ${getBookingValue(booking, "refreshIntervalMs", interparkDefaults.refreshIntervalMs || 2000)}ms + jitter ${getBookingValue(booking, "refreshJitterMs", interparkDefaults.refreshJitterMs || 600)}ms / area ${getBookingValue(booking, "areaScanIntervalMs", interparkDefaults.areaScanIntervalMs || 800)}ms`;
+        polling.textContent = `轮询: 每轮 ${getBookingValue(booking, "refreshIntervalMs", interparkDefaults.refreshIntervalMs || 2000)}ms + 抖动 ${getBookingValue(booking, "refreshJitterMs", interparkDefaults.refreshJitterMs || 600)}ms / 区域 ${getBookingValue(booking, "areaScanIntervalMs", interparkDefaults.areaScanIntervalMs || 800)}ms`;
         concertInfo.appendChild(polling);
 
         let maxAreas = document.createElement("p");
-        maxAreas.textContent = `Max areas: ${getBookingValue(booking, "maxAreaClicksPerRefresh", interparkDefaults.maxAreaClicksPerRefresh || 12)}`;
+        maxAreas.textContent = `最多区域: ${getBookingValue(booking, "maxAreaClicksPerRefresh", interparkDefaults.maxAreaClicksPerRefresh || 12)}`;
         concertInfo.appendChild(maxAreas);
 
         let maxSeatRow = document.createElement("p");
         const seatRowValue = getBookingValue(booking, "maxSeatRow", interparkDefaults.maxSeatRow || 0);
-        maxSeatRow.textContent = Number(seatRowValue) > 0 ? `Seat row filter: first ${seatRowValue} rows` : "Seat row filter: unlimited";
+        maxSeatRow.textContent = Number(seatRowValue) > 0 ? `座位排过滤: 前 ${seatRowValue} 排` : "座位排过滤: 不限制";
         concertInfo.appendChild(maxSeatRow);
 
         let timeout = document.createElement("p");
         const timeoutValue = getBookingValue(booking, "bookingSessionTimeoutMinutes", interparkDefaults.bookingSessionTimeoutMinutes || 9.5);
-        timeout.textContent = Number(timeoutValue) > 0 ? `Order page reopen: ${timeoutValue} minutes` : "Order page reopen: off";
+        timeout.textContent = Number(timeoutValue) > 0 ? `订购页重开: ${timeoutValue} 分钟` : "订购页重开: 关闭";
         concertInfo.appendChild(timeout);
     }
 
@@ -140,9 +140,9 @@ function createConcertItem(booking, index) {
 
     let actionsContainer = document.createElement("div");
     actionsContainer.classList.add("booking-actions");
-    actionsContainer.appendChild(createCardAction("Start", "start-action", () => startBooking(booking)));
-    actionsContainer.appendChild(createCardAction("Stop", "stop-action", () => stopBooking(booking.platform)));
-    actionsContainer.appendChild(createCardAction("Edit", "edit-action", () => editBooking(booking)));
+    actionsContainer.appendChild(createCardAction("开始", "start-action", () => startBooking(booking)));
+    actionsContainer.appendChild(createCardAction("停止", "stop-action", () => stopBooking(booking.platform)));
+    actionsContainer.appendChild(createCardAction("编辑", "edit-action", () => editBooking(booking)));
 
     div.appendChild(concertInfo);
     div.appendChild(platformImage);

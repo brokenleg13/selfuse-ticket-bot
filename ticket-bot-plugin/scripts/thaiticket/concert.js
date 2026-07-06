@@ -9,19 +9,19 @@ function searchConcertUrl(htmlString) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(htmlString, 'text/html');
 
-    // Use querySelector to locate the target <a> tag directly
+    // 使用 querySelector 直接定位到目标 <a> 标签
     const linkElement = doc.querySelector(".btn-item a");
-
-    // Make sure the element exists and has an href attribute
+    
+    // 确保元素存在并且有 href 属性
     if (linkElement && linkElement.hasAttribute('href')) {
         const href = linkElement.getAttribute('href');
-        // Check that href is a valid link, not "javascript:..."
+        // 检查 href 是否为有效的链接，而不是 "javascript:..."
         if (href && !href.toLowerCase().startsWith('javascript:')) {
             return href;
         }
     }
-
-    // If no matching link is found, return null
+    
+    // 如果没有找到符合条件的链接，则返回 null
     return null;
 }
 
@@ -38,7 +38,7 @@ async function getConcertPage(ticketUrl){
         "sec-ch-ua": `"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"`,
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": `"Windows"`,
-        // Note: Cookie is hardcoded and may expire or become invalid. In a real application, you may need to fetch it dynamically.
+        // 注意: Cookie 是硬编码的，可能会过期或失效。在实际应用中，您可能需要动态获取。
         "Cookie": cookie,
         "sec-gpc": "1"
     };
@@ -56,63 +56,63 @@ async function getConcertPage(ticketUrl){
 
         const htmlString = await response.text();
         let url = searchConcertUrl(htmlString);
-        console.log("[Thaiticket] Retrieved ticket link:", url);
+        console.log("[Thaiticket] 获取到开票链接:", url);
         if (url) {
             return url;
         } else {
             return null;
         }
     } catch (error) {
-        console.error('fetch operation encountered an issue:', error);
+        console.error('fetch 操作出现问题:', error);
     }
 }
 
 async function searchConcert(ticketUrl, ticketTime){
     const ticketTimeObj = new Date(ticketTime);
     if (isNaN(ticketTimeObj.getTime())) {
-        console.error("[Thaiticket] Invalid ticketTime format:", ticketTime);
+        console.error("[Thaiticket] 无效的 ticketTime 格式:", ticketTime);
         return null;
     }
 
     let pollingTimeout = null;
-    // If the ticket time is earlier than the current time, set the timeout to current time + 10 seconds
+    //如果开票时间小于当前时间，超时时间设置为当前时间+10秒
     if (ticketTimeObj < new Date()) {
         pollingTimeout = new Date(new Date().getTime() + 10000);
     } else {
-        // Polling will time out 10 seconds after the ticket time
+        // 轮询将在开票时间后10秒超时
         pollingTimeout = new Date(ticketTimeObj.getTime() + 10000);
     }
 
     const pollForUrl = async () => {
-        console.log("[Thaiticket] Starting to poll for the ticket link...");
+        console.log("[Thaiticket] 开始轮询获取开票链接...");
         while (new Date() < pollingTimeout) {
             const url = await getConcertPage(ticketUrl);
             if (url) {
-                console.log("[Thaiticket] Successfully retrieved the ticket link:", url);
+                console.log("[Thaiticket] 成功获取到开票链接:", url);
                 return url;
             }
-            // Wait a short while before retrying
+            // 等待一小段时间再重试
             await sleep(1500+Math.random()*500);
         }
-        console.log("[Thaiticket] Polling timed out, failed to retrieve the ticket link.");
+        console.log("[Thaiticket] 轮询超时，未能获取到开票链接。");
         return null;
     };
 
     const currentTime = new Date();
 
     if (currentTime >= ticketTimeObj) {
-        console.log("[Thaiticket] Current time has passed the ticket time, starting to fetch the link immediately.");
+        console.log("[Thaiticket] 当前时间已过开票时间，立即开始获取链接。");
         return await pollForUrl();
     } else {
-        const pollingStartTime = new Date(ticketTimeObj.getTime() - 2000); // 2 seconds early
-        console.log("[Thaiticket] Current time:", currentTime);
-        console.log("[Thaiticket] Polling start time:", pollingStartTime);
+        const pollingStartTime = new Date(ticketTimeObj.getTime() - 2000); // 提前2秒
+        console.log("[Thaiticket] 当前时间:", currentTime);
+        console.log("[Thaiticket] 轮询开始时间:", pollingStartTime);
         if(pollingStartTime > currentTime){
             let waitTime = pollingStartTime.getTime() - currentTime.getTime();
-            console.log(`[Thaiticket] ${waitTime / 1000} seconds until polling starts, waiting...`);
+            console.log(`[Thaiticket] 距离轮询开始还有 ${waitTime / 1000} 秒, 等待中...`);
             await sleep(waitTime);
         }
-        console.log("[Thaiticket] Polling start time reached, beginning to fetch the link.");
+        console.log("[Thaiticket] 轮询开始时间已到，开始获取链接。");
         return await pollForUrl();
     }
 }
