@@ -19,6 +19,25 @@ function getBookingValue(booking, key, fallback) {
     return value === undefined || value === null || value === "" ? fallback : value;
 }
 
+const platformIdParams = { melon: "prodId" };
+
+function extractIdFromUrl(value, paramName) {
+    const trimmed = (value || "").toString().trim();
+    if (!paramName || !/^https?:\/\//i.test(trimmed)) {
+        return trimmed;
+    }
+
+    try {
+        return new URL(trimmed).searchParams.get(paramName) || trimmed;
+    } catch (error) {
+        return trimmed;
+    }
+}
+
+function normalizeConcertId(platform, concertId) {
+    return extractIdFromUrl(concertId, platformIdParams[platform]);
+}
+
 let loadAutoBooking = async () => {
     let autoBooking = await get_stored_value(storageKeys.autoBooking);
     let listContainer = document.getElementById("list-booking");
@@ -132,7 +151,7 @@ function createConcertItem(booking, index) {
 
     div.addEventListener("click", async() => {
         await stopBooking(booking.platform);
-        openBookingUrl(booking.platform, booking["concert-id"]);
+        openBookingUrl(booking.platform, normalizeConcertId(booking.platform, booking["concert-id"]));
     });
 
     return div;
@@ -158,7 +177,7 @@ async function sendActiveTabMessage(message) {
     });
 }
 
-function getStartMessage(booking) {
+function getStartMessage(booking, concertId) {
     if (booking.platform === "thaiticket") {
         return {
             action: actions.startThaiTicket,
@@ -169,7 +188,7 @@ function getStartMessage(booking) {
     return {
         action: actions.startBot,
         platform: booking.platform,
-        concertId: booking["concert-id"],
+        concertId,
         config: booking,
     };
 }
@@ -186,18 +205,20 @@ function getStopMessage(platform) {
 }
 
 async function startBooking(booking) {
+    const concertId = normalizeConcertId(booking.platform, booking["concert-id"]);
+
     await store_value(storageKeys.botRunState, {
         running: true,
         platform: booking.platform,
-        concertId: booking["concert-id"],
+        concertId,
         config: booking,
     });
 
     try {
-        await sendActiveTabMessage(getStartMessage(booking));
+        await sendActiveTabMessage(getStartMessage(booking, concertId));
     } catch (error) {
         console.error("Start failed:", error);
-        openBookingUrl(booking.platform, booking["concert-id"]);
+        openBookingUrl(booking.platform, concertId);
     }
 }
 

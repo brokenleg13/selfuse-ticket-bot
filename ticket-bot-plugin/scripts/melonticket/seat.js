@@ -1,4 +1,4 @@
-window.isSuccess = false; // 是否成功
+window.isSuccess = false; // whether it succeeded
 let botRunning = false;
 
 async function sleep(t) {
@@ -9,8 +9,18 @@ function theFrame() {
     if (window._theFrameInstance == null) {
       window._theFrameInstance = document.getElementById('oneStopFrame').contentWindow;
     }
-  
+
     return window._theFrameInstance;
+}
+
+async function waitForElement(doc, id, timeoutMs = 3000, intervalMs = 100) {
+    const deadline = Date.now() + timeoutMs;
+    let element = doc.getElementById(id);
+    while (!element && Date.now() < deadline) {
+        await sleep(intervalMs);
+        element = doc.getElementById(id);
+    }
+    return element;
 }
 
 function getConcertId() {
@@ -22,10 +32,10 @@ function openRangeList() {
         return;
     }
     let frame = theFrame();
-    // 查找 class 包含 seat_name 但不包含 open 的元素
+    // Find an element whose class includes seat_name but not open
     let sectionToOpen = frame.document.querySelector(".seat_name:not(.open)");
 
-    // 如果找到了，就点击它
+    // If found, click it
     if (sectionToOpen) {
         sectionToOpen.click();
     }
@@ -46,7 +56,10 @@ function clickOnArea(area) {
 
 async function findSeat() {
     let frame = theFrame();
-    let canvas = frame.document.getElementById("ez_canvas");
+    let canvas = await waitForElement(frame.document, "ez_canvas");
+    if (!canvas) {
+        return false;
+    }
     let seat = canvas.getElementsByTagName("rect");
     await sleep(750);
     for (let i = 0; i < seat.length; i++) {
@@ -58,7 +71,14 @@ async function findSeat() {
             var clickEvent = new Event('click', { bubbles: true });
 
             seat[i].dispatchEvent(clickEvent);
-            frame.document.getElementById("nextTicketSelection").click();
+            let nextBtn = await waitForElement(frame.document, "nextTicketSelection");
+            if (!nextBtn) {
+                // Selection didn't go through (e.g. Melon reverted to the
+                // section list); try the next colored rect instead of
+                // reporting a false success.
+                continue;
+            }
+            nextBtn.click();
             return true;
         }
     }
@@ -68,13 +88,16 @@ async function findSeat() {
 async function checkCaptchaFinish() {
     if (document.getElementById("certification").style.display != "none") {
         await sleep(1000);
-        checkCaptchaFinish();
-        return;
+        return await checkCaptchaFinish();
     }
     let frame = theFrame();
     await sleep(500);
-    frame.document.getElementById("nextTicketSelection").click();
-    return;
+    let nextBtn = await waitForElement(frame.document, "nextTicketSelection");
+    if (!nextBtn) {
+        return false;
+    }
+    nextBtn.click();
+    return true;
 }
 
 async function searchSeat(data) {
@@ -88,8 +111,7 @@ async function searchSeat(data) {
         }
         openRangeList();
         clickOnArea(sec);
-        if (await findSeat()) {
-            checkCaptchaFinish();
+        if (await findSeat() && await checkCaptchaFinish()) {
             return;
         }
         await sleep(750 + Math.random() * 500);
@@ -121,9 +143,20 @@ async function waitFirstLoad(startConfig) {
     }
     openRangeList();
     await sleep(1000);
-    await searchSeat(data);
+    // searchSeat() returns as soon as one seat is picked and confirmed,
+    // but Melon can still bounce the user back to the section list
+    // afterwards (e.g. pressing back, or the seat becoming unavailable
+    // on the next step). Keep retrying until the bot is stopped or a
+    // pick actually sticks.
+    while (botRunning && !window.isSuccess) {
+        await searchSeat(data);
+        if (!botRunning || window.isSuccess) {
+            break;
+        }
+        await sleep(1000);
+    }
     if (window.isSuccess) {
-        sendFeiShuMsg(feishuBotId, `[${new Date().toLocaleString()}]抢票成功`);
+        sendFeiShuMsg(feishuBotId, `[${new Date().toLocaleString()}] Ticket grab succeeded`);
         markRunStateStopped();
     }
 }
