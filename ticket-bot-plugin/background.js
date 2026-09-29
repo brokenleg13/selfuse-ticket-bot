@@ -42,6 +42,31 @@ function buildRefererRule(targetUrl, refererUrl) {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'interparkOnestopAction') {
+        const tabId = sender.tab && sender.tab.id;
+        if (!tabId || !/^https:\/\/tickets\.interpark\.com\/(?:onestop(?:[/?#]|$)|gates\/)/.test(sender.url || '')
+            || !['snapshot', 'poll', 'select', 'cancel'].includes(request.mode)) {
+            sendResponse({ success: false, error: 'Invalid onestop request.' });
+            return false;
+        }
+        (async () => {
+            try {
+                await chrome.scripting.executeScript({
+                    target: { tabId, frameIds: [0] }, world: 'MAIN',
+                    files: ['scripts/interpark/onestop-main.js'],
+                });
+                const results = await chrome.scripting.executeScript({
+                    target: { tabId, frameIds: [0] }, world: 'MAIN',
+                    args: [request.mode, request.payload || {}],
+                    func: (mode, payload) => window.ticketBotOnestopBridge.run(mode, payload),
+                });
+                sendResponse(results[0]?.result || { success: false, error: 'No onestop response.' });
+            } catch (error) {
+                sendResponse({ success: false, error: error.message });
+            }
+        })();
+        return true;
+    }
     if (request.action === ACTIONS.SAVE_DEBUG_IMAGE) {
         const dataUrl = request.dataUrl || '';
         const filename = request.filename || `ticket-bot-plugin/debug-${Date.now()}.png`;
@@ -161,7 +186,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
                 if (mode === 'solveSliderCaptcha') {
                     return (async () => {
-                        const root = document.getElementById('captchSlider');
+                        const root = document.getElementById('captchSlider')
+                            || document.querySelector('[class*="ModalCaptchaSlider_captchaPlugin"]');
                         if (!root) {
                             return {
                                 success: false,

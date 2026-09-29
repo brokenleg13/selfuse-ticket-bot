@@ -126,6 +126,10 @@
                 "https://world.nol.com/ticket/places/*/products/*",
                 "https://world.nol.com/ticket/genre/*/products/*",
                 "https://tickets.interpark.com/waiting*",
+                "https://tickets.interpark.com/gates/*",
+                "https://tickets.interpark.com/onestop/*",
+                "https://tickets.interpark.com/onestop",
+                "https://tickets.interpark.com/onestop?*",
                 "https://gpoticket.globalinterpark.com/Global/Play/Book/BookMain.asp*"
             ],
             "js": [

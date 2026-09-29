@@ -38,6 +38,11 @@
     let lockedSeatContext = null;
     let botState = BOT_STATE.IDLE;
     let queueHeartbeatCount = 0;
+    let onestopRetryAt = 0;
+    let onestopRecovery = null;
+    let onestopSessionStartedAt = 0;
+    let onestopRunGeneration = 0;
+    let onestopPriceSubmittedAt = 0;
     const pageStartedAt = typeof performance !== "undefined" && Number.isFinite(performance.timeOrigin)
         ? performance.timeOrigin
         : Date.now();
@@ -107,6 +112,11 @@
 
     function notifySelectedSeats(prefix, seats) {
         notifyFeishu(`${prefix}：${formatSeatList(seats)}`);
+    }
+
+    function notifySeatLockFailed(reason, seats) {
+        const detail = reason ? `，原因：${reason}` : "";
+        notifySelectedSeats(`Interpark 锁座失败${detail}`, seats);
     }
 
     async function pauseBotWithNotification(message) {
@@ -238,11 +248,17 @@
     }
 
     function getSeatDocument() {
+        if (isInterparkOnestopPage()) {
+            return document;
+        }
         const frame = getSeatFrame();
         return frame && frame.contentDocument;
     }
 
     function getCaptchaDisplay() {
+        if (isInterparkOnestopPage()) {
+            return isElementVisible(findCaptchaInputElement()) ? "block" : "none";
+        }
         const seatDocument = getSeatDocument();
         const captcha = seatDocument && seatDocument.getElementById("divCaptchaWrap");
         if (!captcha) {
@@ -314,11 +330,18 @@
     }
 
     function getCaptchaWrap() {
+        if (isInterparkOnestopPage()) {
+            return document.querySelector('input[class*="ModalCaptchaText_captchaInput"]')?.parentElement?.parentElement || null;
+        }
         const seatDocument = getSeatDocument();
         return seatDocument && seatDocument.getElementById("divCaptchaWrap");
     }
 
     function findSliderCaptchaElement() {
+        if (isInterparkOnestopPage()) {
+            return document.querySelector('[class*="ModalCaptchaSlider_captchaPlugin"]')
+                || document.getElementById("captchSlider");
+        }
         const seatDocument = getSeatDocument();
         const detailFrame = seatDocument && seatDocument.getElementById("ifrmSeatDetail");
         const detailDocument = detailFrame && detailFrame.contentDocument;
@@ -340,6 +363,9 @@
     }
 
     function findCaptchaImageElement() {
+        if (isInterparkOnestopPage()) {
+            return document.querySelector('[class*="ModalCaptchaText_captchaImage"] img');
+        }
         const seatDocument = getSeatDocument();
         if (!seatDocument) {
             return null;
@@ -648,6 +674,9 @@
     }
 
     function findCaptchaInputElement() {
+        if (isInterparkOnestopPage()) {
+            return document.querySelector('input[class*="ModalCaptchaText_captchaInput"]');
+        }
         const seatDocument = getSeatDocument();
         if (!seatDocument) {
             return null;
@@ -708,6 +737,10 @@
     }
 
     function findCaptchaSubmitElement() {
+        if (isInterparkOnestopPage()) {
+            const modal = findCaptchaInputElement()?.closest('[class*="ModalLayout_outerWrap"]');
+            return findOnestopButton('[class*="ModalLayout_footer"] button[class*="EntButton_primary"]', modal);
+        }
         const seatDocument = getSeatDocument();
         const wrap = getCaptchaWrap();
         if (!seatDocument) {
@@ -737,6 +770,9 @@
     }
 
     function findCaptchaRefreshElement() {
+        if (isInterparkOnestopPage()) {
+            return document.querySelector('button[class*="ModalCaptchaText_buttonRefresh"]');
+        }
         const seatDocument = getSeatDocument();
         if (!seatDocument) {
             return null;
@@ -796,6 +832,9 @@
     }
 
     function getCaptchaErrorText() {
+        if (isInterparkOnestopPage()) {
+            return normalizeText(document.querySelector('[class*="ModalCaptchaText_captchaError"]')?.textContent || "");
+        }
         const seatDocument = getSeatDocument();
         if (!seatDocument || !seatDocument.body) {
             return "";
@@ -833,6 +872,10 @@
     }
 
     async function submitCaptchaInput(input) {
+        if (isInterparkOnestopPage()) {
+            // React enables the submit button after processing the input event.
+            await delay(100);
+        }
         const button = findCaptchaSubmitElement();
         if (button) {
             return clickElement(button);
@@ -887,6 +930,7 @@
             }
 
             for (let attempt = 1; attempt <= options.maxAttempts; attempt += 1) {
+                if (!botRunning) return false;
                 const currentImage = findCaptchaImageElement();
                 const currentInput = findCaptchaInputElement();
                 if (!currentImage || !currentInput) {
@@ -911,6 +955,7 @@
                 }
 
                 captchaOcrState.lastImageKey = getDataUrlKey(dataUrl);
+                if (!botRunning || !currentInput.isConnected || !isCaptchaVisible()) return false;
                 setInputValue(currentInput, result.code);
                 updateStatus(`Captcha OCR filled ${result.code}${result.elapsedMs ? ` (${result.elapsedMs}ms)` : ""}; submitting.`);
                 await submitCaptchaInput(currentInput);
@@ -1226,6 +1271,9 @@
     }
 
     async function clickElement(element) {
+        if (isInterparkOnestopPage()) {
+            return clickOnestopElement(element);
+        }
         return runMainWorldAction(element, "click");
     }
 
@@ -1844,6 +1892,7 @@
         const payload = buildSeatLockPayload(candidates);
         if (!payload) {
             updateStatus("Seat lock payload could not be built.");
+            notifySeatLockFailed("锁座参数构建失败", candidates);
             return null;
         }
 
@@ -1875,10 +1924,17 @@
                     lockedAt: Date.now(),
                 };
                 updateStatus(`Seat lock API returned success for ${firstSeat.block || "-"} ${firstSeat.seatNo || ""}; waiting for page selection.`);
+            } else {
+                const responseMessage = normalizeText(text.replace(/<[^>]*>/g, " ")).slice(0, 160);
+                const reason = responseMessage
+                    ? `HTTP ${response.status} ${response.statusText || ""} ${responseMessage}`.trim()
+                    : `HTTP ${response.status} ${response.statusText || ""}`.trim();
+                notifySeatLockFailed(reason, payload.selected);
             }
             return success ? payload.selected : null;
         } catch (error) {
             updateStatus(`Seat lock API failed: ${error.message}`);
+            notifySeatLockFailed(error && error.message || "请求异常", payload.selected);
             return null;
         }
     }
@@ -2872,16 +2928,10 @@
     }
 
     async function clickNolBuyButton() {
-        const candidates = Array.from(document.querySelectorAll("button, a"))
-            .filter(element => {
-                const text = normalizeText([
-                    element.innerText || element.textContent || "",
-                    element.getAttribute("aria-label") || "",
-                    element.getAttribute("title") || "",
-                ].join(" "));
-                return /立即购买|Buy|Book|예매/i.test(text);
-            });
-        const target = candidates.find(element => {
+        const candidates = Array.from(document.querySelectorAll(
+            '[class~="grid-area_purchase-button"] button.nds-e-rectangle-button--variant_filled_primary, '
+            + '[class~="pos_fixed"][class~="bottom_0"] button.nds-e-rectangle-button--variant_filled_primary'
+        )).filter(element => {
             const rect = element.getBoundingClientRect();
             const style = getComputedStyle(element);
             return !element.disabled
@@ -2890,6 +2940,7 @@
                 && style.display !== "none"
                 && style.visibility !== "hidden";
         });
+        const target = candidates.length === 1 ? candidates[0] : null;
         if (target) {
             if (await clickVisibleElement(target)) {
                 updateStatus("Clicked NOL buy button.");
@@ -2930,8 +2981,420 @@
         return /gpoticket\.globalinterpark\.com/i.test(location.hostname) && /\/Global\/Play\/Book\/BookMain\.asp/i.test(location.pathname);
     }
 
+    function isInterparkOnestopPage() {
+        return location.hostname === "tickets.interpark.com" && /^\/onestop(?:\/|$)/.test(location.pathname);
+    }
+
+    function findOnestopButton(selector, root = document) {
+        const candidates = Array.from(root?.querySelectorAll(selector) || []).filter(isElementVisible);
+        // Component-scoped identity is independent of translated labels. Ambiguity fails closed.
+        return candidates.length === 1 ? candidates[0] : null;
+    }
+
+    function clickOnestopElement(element) {
+        if (!botRunning || !element || !element.isConnected || element.disabled
+            || element.getAttribute("aria-disabled") === "true" || !isElementVisible(element)) {
+            return false;
+        }
+        // The legacy main-world helper emits two clicks, which toggles React selections off.
+        if (typeof element.click === "function") {
+            element.click();
+        } else {
+            element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+        }
+        return true;
+    }
+
+    function parseOnestopTime(text) {
+        const match = normalizeText(text).match(/(?:(上午|下午|오전|오후)\s*)?(\d{1,2}):(\d{2})(?:\s*(AM|PM))?/i);
+        if (!match) return "";
+        let hour = Number(match[2]);
+        const period = (match[1] || match[4] || "").toUpperCase();
+        if (period) hour = hour % 12 + (/PM|下午|오후/.test(period) ? 12 : 0);
+        if (hour > 23 || Number(match[3]) > 59) return "";
+        return `${String(hour).padStart(2, "0")}${match[3]}`;
+    }
+
+    function collectOnestopDates() {
+        return Array.from(document.querySelectorAll('[class*="EntCalendar_month"]')).flatMap(heading => {
+            const month = normalizeText(heading.textContent).match(/(\d{4})\D+(\d{1,2})/);
+            if (!month) return [];
+            // The month header is outside the slides; only the active slide belongs to it.
+            const container = heading.closest('.swiper')?.querySelector('.swiper-slide-active')
+                || heading.closest('.swiper-slide') || heading.parentElement;
+            return Array.from(container.querySelectorAll('button[class*="EntCalendar_dateButton"]'))
+                .filter(element => !element.disabled && isElementVisible(element))
+                .map(element => ({
+                    element,
+                    date: `${month[1]}${month[2].padStart(2, "0")}${normalizeText(element.textContent).padStart(2, "0")}`,
+                }));
+        });
+    }
+
+    async function selectOnestopSchedule() {
+        const targetDate = normalizeDateValue(activeConfig.date);
+        const options = collectOnestopDates();
+        const selected = targetDate ? options.find(option => option.date === targetDate)
+            : options.find(option => option.element.getAttribute("aria-pressed") === "true") || options[0];
+        if (!selected) {
+            // Swiper exposes at most the adjacent months; advance only toward a configured date.
+            const heading = Array.from(document.querySelectorAll('[class*="EntCalendar_month"]')).find(isElementVisible);
+            const month = heading && normalizeDateValue(heading.textContent).slice(0, 6);
+            const arrow = targetDate && month && targetDate.slice(0, 6) !== month
+                ? document.getElementById(targetDate.slice(0, 6) > month ? "swiperButtonNext" : "swiperButtonPrev") : null;
+            if (clickOnestopElement(arrow)) return;
+            updateStatus(`等待可用日期 ${targetDate || "（页面加载中）"}，不会改选其他日期。`);
+            return;
+        }
+        if (selected.element.getAttribute("aria-pressed") !== "true") {
+            clickOnestopElement(selected.element);
+            return; // Let React replace the times before querying them.
+        }
+        const targetTime = normalizeTimeValue(activeConfig.time);
+        const times = Array.from(document.querySelectorAll('button[class*="TimeBlock_timeButton"]'))
+            .filter(element => !element.disabled && isElementVisible(element));
+        const time = targetTime ? times.find(element => parseOnestopTime(element.textContent) === targetTime)
+            : times.find(element => element.getAttribute("aria-selected") === "true") || times[0];
+        if (!time) {
+            updateStatus(`日期 ${selected.date}：等待场次 ${targetTime || "加载"}，不会改选其他时间。`);
+            return;
+        }
+        if (time.getAttribute("aria-selected") !== "true") {
+            clickOnestopElement(time);
+            return;
+        }
+        if (clickOnestopElement(findOnestopButton('[class*="ScheduleContent_footerButton"] button[class*="EntButton_primary"]'))) {
+            updateStatus(`已选择 ${selected.date} ${parseOnestopTime(time.textContent)}，等待进入选座。`);
+            await delay(1000);
+        }
+    }
+
+    async function runOnestopLoop(generation = onestopRunGeneration) {
+        try {
+            while (botRunning && generation === onestopRunGeneration && isInterparkOnestopPage()) {
+                if (!await syncRunStateConfig()) return;
+                if (generation !== onestopRunGeneration) return;
+                const step = location.pathname.replace(/\/$/, "").split("/").pop();
+                if (step === "onestop") {
+                    updateStatus("等待新版订购入口完成初始化。");
+                } else if (step === "schedule") {
+                    setBotState(BOT_STATE.DATE_TIME);
+                    await selectOnestopSchedule();
+                } else if (step === "seat") {
+                    const detailStep = new URLSearchParams(location.search).get("step");
+                    if (detailStep === "price") {
+                        await advanceOnestopPrice();
+                    } else if (detailStep) {
+                        await pauseBotWithNotification("已进入后续订购步骤，请确认页面信息。");
+                        return;
+                    } else {
+                        await runOnestopSeatTick();
+                    }
+                } else {
+                    await pauseBotWithNotification("已进入后续订购页面，请确认联系人及付款信息。");
+                    return;
+                }
+                await delay(Math.max(500, getRefreshDelayMs()));
+            }
+        } catch (error) {
+            if (generation === onestopRunGeneration) await pauseBotWithNotification(`新版流程异常：${error.message || error}`);
+        }
+    }
+
+    // Orchestration: challenge handling is separate from inventory data access.
+    async function runOnestopSeatTick() {
+        const generation = onestopRunGeneration;
+        if (isCaptchaVisible()) {
+            setBotState(BOT_STATE.CAPTCHA);
+            await solveCaptchaWithLocalOcr();
+            return;
+        }
+        if (isSliderCaptchaPopupVisible() && !onestopRecovery) {
+            onestopRecovery = { area: { code: "" }, phase: "check", startedAt: Date.now() };
+        }
+        if (onestopRecovery) {
+            await recoverOnestopMap();
+            if (onestopRecovery || !botRunning || generation !== onestopRunGeneration) return;
+        }
+        if (Date.now() < onestopRetryAt) return;
+        await scanOnestopSeats();
+    }
+
+    function validateOnestopContext(context, allowSelected = false) {
+        const configuredId = getConfiguredProductId(activeConfig);
+        if (configuredId && String(context.goodsCode) !== configuredId) return "当前新版演出与卡片不匹配。";
+        if ((activeConfig.date && context.date && normalizeDateValue(activeConfig.date) !== normalizeDateValue(context.date))
+            || (activeConfig.time && context.time && normalizeTimeValue(activeConfig.time) !== (parseOnestopTime(context.time) || normalizeTimeValue(context.time)))) {
+            return "当前新版场次与卡片日期/时间不匹配，请重新选择场次。";
+        }
+        if (!allowSelected && context.selected.length) return "页面已有选中的座位，已停止后台轮询，请确认页面选择。";
+        return "";
+    }
+
+    function planOnestopBatches(blocks, preferred) {
+        const areas = preferred.length ? [...new Set(preferred.flatMap(value => blocks.filter(block =>
+            normalizeOnestopArea(value) === normalizeOnestopArea(block.code)
+            || value === block.blockKey || (block.name && value === block.name))))] : blocks;
+        const batches = [];
+        for (let index = 0; index < areas.length; index += 16) batches.push(areas.slice(index, index + 16));
+        return batches;
+    }
+
+    async function handleOnestopQueryFailure(result, batch) {
+        if (result.status === 403 && batch?.length) {
+            onestopRecovery = { area: batch[0], phase: "probe", startedAt: Date.now(), error: result.error };
+            updateStatus("区域接口受阻，进入单次验证码检查。");
+        } else if (result.status === 401) {
+            await pauseBotWithNotification("订购会话失效，请重新登录后启动。");
+        } else {
+            const retryMs = result.status === 429 ? Math.max(30000, result.retryAfterMs || 0) : Math.max(500, getRefreshDelayMs());
+            onestopRetryAt = Date.now() + retryMs;
+            updateStatus(`后台请求失败：${result.error}；${Math.ceil(retryMs / 1000)} 秒后重试。`);
+        }
+    }
+
+    // Normal inventory path never reads or changes map zoom/viewport/region selection.
+    async function scanOnestopSeats() {
+        const generation = onestopRunGeneration;
+        const timeout = getBookingSessionTimeoutMs();
+        if (!onestopSessionStartedAt) onestopSessionStartedAt = Date.now();
+        if (timeout && Date.now() - onestopSessionStartedAt >= timeout) {
+            await restartBookingFromProductPage("新版选座会话到达配置超时");
+            return;
+        }
+        const snapshot = await requestOnestop("snapshot");
+        if (!botRunning || generation !== onestopRunGeneration) return;
+        if (!snapshot.success) {
+            await handleOnestopQueryFailure(snapshot);
+            return;
+        }
+        const context = snapshot.result;
+        const problem = validateOnestopContext(context);
+        if (problem) { await pauseBotWithNotification(problem); return; }
+        const preferred = getPreferredSections();
+        const batches = planOnestopBatches(context.blocks, preferred);
+        if (!batches.length) {
+            updateStatus(`未匹配区域 ${preferred.join(", ")}；可用区域码：${context.blocks.map(block => block.code).join(", ")}`);
+            return;
+        }
+        setBotState(BOT_STATE.SCANNING);
+        for (let index = 0; index < batches.length; index++) {
+            if (!botRunning || generation !== onestopRunGeneration || !await syncRunStateConfig()) return;
+            const batch = batches[index];
+            const result = await requestOnestop("poll", { key: context.key, blockKeys: batch.map(area => area.blockKey) });
+            if (!botRunning || generation !== onestopRunGeneration) return;
+            if (!result.success) { await handleOnestopQueryFailure(result, batch); return; }
+            const byKey = new Map(result.result.blocks.map(block => [block.blockKey, block]));
+            let available = 0;
+            for (const area of batch) {
+                const inventory = byKey.get(area.blockKey);
+                if (!inventory) { await pauseBotWithNotification("批次响应缺少目标区域，已停止选座。"); return; }
+                available += inventory.seats.length;
+                const candidates = chooseOnestopSeats(inventory.seats, getDesiredTicketCount(), getMaxSeatRow());
+                if (candidates.length) { await selectOnestopSeats(context, area, candidates); return; }
+            }
+            updateStatus(`后台批次 ${index + 1}/${batches.length}：${batch.map(area => area.code).join(", ")}；${available} 个可用座位。`);
+            if (index + 1 < batches.length) await delay(Math.max(200, getAreaScanIntervalMs()));
+        }
+    }
+
+    function normalizeOnestopArea(value) {
+        const text = normalizeText(String(value || ""));
+        return /^\d+$/.test(text) ? String(Number(text)) : text.toUpperCase();
+    }
+
+    function chooseOnestopSeats(seats, count, maxRow) {
+        const allowed = seats.filter(seat => !maxRow || (seat.visualRow > 0 && seat.visualRow <= maxRow));
+        const sorted = [...allowed].sort((a, b) => (a.visualRow || Infinity) - (b.visualRow || Infinity)
+            || Number(a.colIdx ?? Infinity) - Number(b.colIdx ?? Infinity));
+        for (const seat of sorted) {
+            if (seat.seatGroupId) {
+                const group = sorted.filter(item => item.seatGroupId === seat.seatGroupId);
+                if (group.length === count && group.length === seat.groupSize) return group;
+                continue;
+            }
+            if (count === 1) return [seat];
+            if (seat.rowIdx == null || seat.colIdx == null) continue;
+            const adjacent = sorted.filter(item => !item.seatGroupId && item.rowIdx === seat.rowIdx
+                && item.seatGrade === seat.seatGrade && Number(item.colIdx) >= Number(seat.colIdx)
+                && Number(item.colIdx) < Number(seat.colIdx) + count);
+            if (adjacent.length === count && new Set(adjacent.map(item => item.colIdx)).size === count) return adjacent;
+        }
+        return [];
+    }
+
+    function requestOnestop(mode, payload = {}) {
+        return new Promise(resolve => {
+            chrome.runtime.sendMessage({ action: "interparkOnestopAction", mode, payload }, response => {
+                if (chrome.runtime.lastError) {
+                    resolve({ success: false, error: chrome.runtime.lastError.message });
+                } else {
+                    resolve(response || { success: false, error: "新版页面没有响应" });
+                }
+            });
+        });
+    }
+
+    async function selectOnestopSeats(context, area, seats) {
+        const generation = onestopRunGeneration;
+        const groups = seats[0].seatGroupId ? [seats] : seats.map(seat => [seat]);
+        for (const group of groups) {
+            if (!botRunning || generation !== onestopRunGeneration || !await syncRunStateConfig()) return;
+            const result = await requestOnestop("select", {
+                key: context.key, blockKey: area.blockKey, seatInfoIds: group.map(seat => seat.seatInfoId),
+            });
+            if (!botRunning || generation !== onestopRunGeneration) return;
+            if (!result.success || !result.result.selected) {
+                await pauseBotWithNotification(`区域 ${area.code} 预选未全部成功，请检查页面已选座位：${result.error || "座位已被占用"}`);
+                return;
+            }
+        }
+        // The site's handler performs preselection and syncs React + session context.
+        // Its completion button performs the actual select API and all validation.
+        await delay(200);
+        if (!botRunning || generation !== onestopRunGeneration) return;
+        const complete = findOnestopButton('[class*="InfoSelected_footer"] button[class*="EntButton_primary"]');
+        if (!clickOnestopElement(complete)) {
+            await pauseBotWithNotification(`区域 ${area.code} 已预选 ${seats.length} 席，请手动点击完成选择。`);
+            return;
+        }
+        const started = Date.now();
+        while (botRunning && generation === onestopRunGeneration && Date.now() - started < 5000) {
+            if (new URLSearchParams(location.search).get("step") === "price") {
+                setBotState(BOT_STATE.LOCKED);
+                updateStatus(`区域 ${area.code} 锁座成功，继续选择票价：${formatSeatList(seats)}`);
+                return;
+            }
+            await delay(200);
+        }
+        if (botRunning && generation === onestopRunGeneration) await pauseBotWithNotification("已提交完成选择，未确认进入票价步骤；请检查页面提示。");
+    }
+
+    async function advanceOnestopPrice() {
+        const generation = onestopRunGeneration;
+        if (onestopPriceSubmittedAt) {
+            if (Date.now() - onestopPriceSubmittedAt > 10000) {
+                await pauseBotWithNotification("票价已提交但页面未跳转，请检查提示；不会重复提交。");
+            }
+            return;
+        }
+        const groups = Array.from(document.querySelectorAll('[class*="PriceGroup_group"]')).filter(isElementVisible);
+        if (!groups.length) { updateStatus("等待票价信息加载。"); return; }
+        const snapshot = await requestOnestop("snapshot");
+        if (!botRunning || generation !== onestopRunGeneration) return;
+        if (!snapshot.success) { updateStatus(`等待锁座信息：${snapshot.error}`); return; }
+        const problem = validateOnestopContext(snapshot.result, true);
+        if (problem) { await pauseBotWithNotification(problem); return; }
+        const plans = groups.map(group => ({
+            required: Number(group.querySelector('[class*="PriceGroup_countMax"]')?.textContent.replace(/\D/g, "")),
+            inputs: Array.from(group.querySelectorAll('[class*="PriceItem_typeItem"] input[role="spinbutton"]')),
+        }));
+        const required = plans.reduce((sum, plan) => sum + plan.required, 0);
+        if (plans.some(plan => !Number.isInteger(plan.required) || plan.required < 1)
+            || required !== snapshot.result.selected.length || required !== getDesiredTicketCount()) {
+            await pauseBotWithNotification("票价数量与已锁座位或卡片数量不一致，已停止。"); return;
+        }
+        // Do not guess eligibility or discounts when multiple price types are offered.
+        if (plans.some(plan => plan.inputs.length !== 1)) {
+            await pauseBotWithNotification("存在多个票价选项，请选择适用票价后继续；不会自动猜测优惠资格。"); return;
+        }
+        for (const plan of plans) {
+            const input = plan.inputs[0];
+            const current = Number(input.getAttribute("aria-valuenow"));
+            // The live stepper changes aria-valuemax to the remaining allowance (0 after 1/1).
+            // The price group's locked quantity, not aria-valuemax, is the target total.
+            if (!Number.isInteger(current) || current < 0 || current > plan.required) {
+                await pauseBotWithNotification("票价计数异常，已停止。"); return;
+            }
+            if (current < plan.required) {
+                const plus = input.closest('.nds-e-stepper__root')?.querySelector('.nds-e-stepper__incrementButton');
+                if (clickOnestopElement(plus)) updateStatus(`选择票价数量 ${current + 1}/${plan.required}。`);
+                return; // Observe the committed React count on the next tick; never double-increment.
+            }
+        }
+        const next = findOnestopButton('[class*="PriceContent_footer"] button[class*="EntButton_primary"]');
+        if (clickOnestopElement(next)) {
+            onestopPriceSubmittedAt = Date.now();
+            updateStatus(`已选择 ${required} 张票价，进入后续订购信息页。`);
+        }
+    }
+
+    async function recoverOnestopMap() {
+        const recovery = onestopRecovery;
+        if (recovery.phase === "probe") {
+            const fit = document.querySelector('button[class*="SeatPlan_zoomFitButton"]');
+            if (fit && !fit.disabled) {
+                clickOnestopElement(fit);
+                await delay(400);
+            }
+            if (!botRunning) return;
+            const image = document.querySelector('img[alt="blockImg"]');
+            const svg = document.querySelector('[class*="SeatMap_seatGroup"] svg');
+            const rect = image?.getBoundingClientRect();
+            const viewBox = svg?.viewBox?.baseVal;
+            const area = recovery.area;
+            if (!image || !rect?.width || !viewBox?.width
+                || ![area.left, area.right, area.top, area.bottom].every(value => Number.isFinite(Number(value)))) {
+                recovery.phase = "manual";
+                updateStatus("接口受阻，请手动点击一次目标区域，检查是否出现拼图验证码；检查后将恢复总览。");
+                return;
+            }
+            image.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window,
+                clientX: rect.left + ((Number(area.left) + Number(area.right)) / 2 - viewBox.x) / viewBox.width * rect.width,
+                clientY: rect.top + ((Number(area.top) + Number(area.bottom)) / 2 - viewBox.y) / viewBox.height * rect.height,
+            }));
+            recovery.phase = "check";
+            recovery.startedAt = Date.now();
+            await delay(1000);
+            return;
+        }
+        if (isSliderCaptchaPopupVisible()) {
+            setBotState(BOT_STATE.CAPTCHA);
+            recovery.attempts = recovery.attempts || 0;
+            if (recovery.attempts >= getCaptchaOcrOptions().maxAttempts) {
+                updateStatus("拼图验证码自动识别未通过，请手动完成；完成后将恢复总览。");
+                return;
+            }
+            recovery.attempts += 1;
+            await solveSliderCaptchaWithLocalOcr(recovery.area.code);
+            return;
+        }
+        if (isCaptchaVisible()) return;
+        const fit = document.querySelector('button[class*="SeatPlan_zoomFitButton"]');
+        if (recovery.phase === "manual" && (!fit || fit.disabled)) return;
+        if (Date.now() - recovery.startedAt < 2500) return;
+        if (!fit || fit.disabled) {
+            if (Date.now() - recovery.startedAt >= 10000) {
+                recovery.phase = "manual";
+                updateStatus("单次区域点击未确认生效，请手动点击目标区域；不会连续点击地图。");
+            }
+            return;
+        }
+        if (fit && !fit.disabled) {
+            if (!clickOnestopElement(fit)) return;
+            // Map animation is cosmetic: resume API polling in this scan, without waiting for it.
+            onestopRecovery = null;
+            updateStatus("已点击右下角恢复总览，后台接口轮询继续；不等待地图动画。");
+        }
+    }
+
     function isInterparkWaitingPage() {
         return /tickets\.interpark\.com/i.test(location.hostname) && /\/waiting/i.test(location.pathname);
+    }
+
+    function isInterparkGatePage() {
+        return location.hostname === "tickets.interpark.com" && location.pathname.startsWith("/gates/");
+    }
+
+    async function waitForOnestopGate(generation) {
+        while (botRunning && generation === onestopRunGeneration && isInterparkGatePage()) {
+            if (!await syncRunStateConfig()) return;
+            updateStatus("等待网站确认订购信息并进入新版场次页。");
+            await delay(500);
+        }
+        if (botRunning && generation === onestopRunGeneration && isInterparkOnestopPage()) {
+            await runOnestopLoop(generation);
+        }
     }
 
     function getQueueWaitingStatus(heartbeatCount) {
@@ -2983,6 +3446,22 @@
         setBotState(BOT_STATE.STARTING);
         updateStatus("Started.");
 
+        if (isInterparkGatePage()) {
+            onestopRunGeneration += 1;
+            waitForOnestopGate(onestopRunGeneration);
+            return;
+        }
+
+        if (isInterparkOnestopPage()) {
+            onestopRunGeneration += 1;
+            onestopRecovery = null;
+            onestopRetryAt = 0;
+            onestopSessionStartedAt = 0;
+            onestopPriceSubmittedAt = 0;
+            runOnestopLoop();
+            return;
+        }
+
         if (isNolProductPage()) {
             setBotState(BOT_STATE.PRODUCT_PAGE);
             if (isMatchingBooking(activeConfig)) {
@@ -3017,6 +3496,8 @@
 
     async function stopBot() {
         botRunning = false;
+        onestopRunGeneration += 1;
+        if (isInterparkOnestopPage()) requestOnestop("cancel");
         clearTimeout(refreshTimer);
         await markRunStateStopped();
         setBotState(BOT_STATE.STOPPED);
