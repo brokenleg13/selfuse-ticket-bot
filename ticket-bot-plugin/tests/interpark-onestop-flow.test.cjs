@@ -104,6 +104,10 @@ function setup(t, { available = true, blockedOnce = false, fromGate = false, fro
         w.document.body.append(footer);
     };
     // Execute the production script unchanged, including automatic startup from storage.
+    w.eval(read('scripts/common/captcha-client.js'));
+    w.eval(read('scripts/common/sound.js'));
+    w.eval(read('scripts/common/status-panel.js'));
+    w.eval(read('scripts/common/runtime.js'));
     w.eval(read('scripts/interpark/seat.js'));
     return { w, events, api, getState: () => state,
         stop: () => contentListener({ action: 'stopTicketBot', platform: 'interpark' }, {}, () => {}) };

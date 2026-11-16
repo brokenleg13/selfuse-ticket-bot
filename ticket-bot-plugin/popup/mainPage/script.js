@@ -5,21 +5,17 @@ const storageKeys = config.storageKeys || {
     autoBooking: "autoBooking",
     botRunState: "ticketBotRunState",
 };
-const actions = config.actions || {
+const actions = Object.assign({
     startBot: "startTicketBot",
     stopBot: "stopTicketBot",
-    startThaiTicket: "startThaiticket",
-    stopThaiTicket: "stopThaiticket",
-};
-const platformStartUrls = config.platformStartUrls || {};
-const interparkDefaults = config.interpark || {};
+    pauseBot: "pauseTicketBot",
+    resumeBot: "resumeTicketBot",
+}, config.actions || {});
+const platforms = config.platforms || {};
 
 function getBookingValue(booking, key, fallback) {
-    const value = booking && booking[key];
-    return value === undefined || value === null || value === "" ? fallback : value;
+    return config.getValue ? config.getValue(booking.platform, booking, key, fallback) : fallback;
 }
-
-const platformIdParams = { melon: "prodId" };
 
 function extractIdFromUrl(value, paramName) {
     const trimmed = (value || "").toString().trim();
@@ -35,7 +31,7 @@ function extractIdFromUrl(value, paramName) {
 }
 
 function normalizeConcertId(platform, concertId) {
-    return extractIdFromUrl(concertId, platformIdParams[platform]);
+    return extractIdFromUrl(concertId, platforms[platform] && platforms[platform].idParam);
 }
 
 let loadAutoBooking = async () => {
@@ -113,25 +109,13 @@ function createConcertItem(booking, index) {
     concertInfo.appendChild(time);
     concertInfo.appendChild(section);
 
-    if (booking.platform === "interpark") {
-        let polling = document.createElement("p");
-        polling.textContent = `轮询: 每轮 ${getBookingValue(booking, "refreshIntervalMs", interparkDefaults.refreshIntervalMs || 2000)}ms + 抖动 ${getBookingValue(booking, "refreshJitterMs", interparkDefaults.refreshJitterMs || 600)}ms / 区域 ${getBookingValue(booking, "areaScanIntervalMs", interparkDefaults.areaScanIntervalMs || 800)}ms`;
-        concertInfo.appendChild(polling);
-
-        let maxAreas = document.createElement("p");
-        maxAreas.textContent = `最多区域: ${getBookingValue(booking, "maxAreaClicksPerRefresh", interparkDefaults.maxAreaClicksPerRefresh || 12)}`;
-        concertInfo.appendChild(maxAreas);
-
-        let maxSeatRow = document.createElement("p");
-        const seatRowValue = getBookingValue(booking, "maxSeatRow", interparkDefaults.maxSeatRow || 0);
-        maxSeatRow.textContent = Number(seatRowValue) > 0 ? `座位排过滤: 前 ${seatRowValue} 排` : "座位排过滤: 不限制";
-        concertInfo.appendChild(maxSeatRow);
-
-        let timeout = document.createElement("p");
-        const timeoutValue = getBookingValue(booking, "bookingSessionTimeoutMinutes", interparkDefaults.bookingSessionTimeoutMinutes || 9.5);
-        timeout.textContent = Number(timeoutValue) > 0 ? `订购页重开: ${timeoutValue} 分钟` : "订购页重开: 关闭";
-        concertInfo.appendChild(timeout);
-    }
+    // 显示 config.js 里标了 summary 的字段（卡片值或默认值）。
+    const fields = platforms[booking.platform] && platforms[booking.platform].fields || [];
+    fields.filter(field => field.summary).forEach(field => {
+        let line = document.createElement("p");
+        line.textContent = `${field.summary}: ${getBookingValue(booking, field.key, "-")}`;
+        concertInfo.appendChild(line);
+    });
 
     let platformImage = document.createElement("img");
     platformImage.classList.add("platform-image");
@@ -141,6 +125,8 @@ function createConcertItem(booking, index) {
     let actionsContainer = document.createElement("div");
     actionsContainer.classList.add("booking-actions");
     actionsContainer.appendChild(createCardAction("开始", "start-action", () => startBooking(booking)));
+    actionsContainer.appendChild(createCardAction("接管", "pause-action", () => setPaused(booking.platform, true)));
+    actionsContainer.appendChild(createCardAction("继续", "resume-action", () => setPaused(booking.platform, false)));
     actionsContainer.appendChild(createCardAction("停止", "stop-action", () => stopBooking(booking.platform)));
     actionsContainer.appendChild(createCardAction("编辑", "edit-action", () => editBooking(booking)));
 
@@ -149,8 +135,8 @@ function createConcertItem(booking, index) {
     div.appendChild(actionsContainer);
     div.appendChild(deleteButton);
 
-    div.addEventListener("click", async() => {
-        await stopBooking(booking.platform);
+    // 点卡片空白处只打开购票页，不再顺带停止脚本（停止会同步到所有页面，容易误触）。
+    div.addEventListener("click", () => {
         openBookingUrl(booking.platform, normalizeConcertId(booking.platform, booking["concert-id"]));
     });
 
@@ -178,13 +164,6 @@ async function sendActiveTabMessage(message) {
 }
 
 function getStartMessage(booking, concertId) {
-    if (booking.platform === "thaiticket") {
-        return {
-            action: actions.startThaiTicket,
-            config: booking,
-        };
-    }
-
     return {
         action: actions.startBot,
         platform: booking.platform,
@@ -193,22 +172,13 @@ function getStartMessage(booking, concertId) {
     };
 }
 
-function getStopMessage(platform) {
-    if (platform === "thaiticket") {
-        return { action: actions.stopThaiTicket };
-    }
-
-    return {
-        action: actions.stopBot,
-        platform,
-    };
-}
-
 async function startBooking(booking) {
     const concertId = normalizeConcertId(booking.platform, booking["concert-id"]);
 
     await store_value(storageKeys.botRunState, {
         running: true,
+        paused: false,
+        updatedAt: Date.now(),
         platform: booking.platform,
         concertId,
         config: booking,
@@ -222,17 +192,27 @@ async function startBooking(booking) {
     }
 }
 
+// 停止/接管/继续只需要改运行状态：所有购票页（包括 Melon 选座弹窗）都监听它，
+// 不依赖“当前标签页”能收到消息。
 async function stopBooking(platform) {
     await store_value(storageKeys.botRunState, {
         running: false,
+        paused: false,
+        updatedAt: Date.now(),
         platform,
     });
+}
 
-    try {
-        await sendActiveTabMessage(getStopMessage(platform));
-    } catch (error) {
-        console.error("Stop failed:", error);
+async function setPaused(platform, paused) {
+    const runState = await get_stored_value(storageKeys.botRunState);
+    if (!runState || !runState.running || runState.platform !== platform) {
+        alert("该平台当前没有在运行");
+        return;
     }
+    await store_value(storageKeys.botRunState, Object.assign({}, runState, {
+        paused,
+        updatedAt: Date.now(),
+    }));
 }
 
 function editBooking(booking) {
@@ -242,24 +222,15 @@ function editBooking(booking) {
 }
 
 function openBookingUrl(platform, concertId) {
-    let url;
-    switch (platform) {
-        case "melon":
-            url = `${platformStartUrls.melon || "https://tkglobal.melon.com/performance/index.htm?langCd=EN&prodId="}${concertId}`;
-            break;
-        case "yes24":
-            url = `${platformStartUrls.yes24 || "http://ticket.yes24.com/Pages/English/Perf/FnPerfDeail.aspx?IdPerf="}${concertId}`;
-            break;
-        case "interpark":
-            url = getInterparkBookingUrl(concertId);
-            break;
-        case "thaiticket":
-            url = platformStartUrls.thaiticket || "https://www.thaiticketmajor.com/";
-            break;
-        default:
-            console.error("Unknown platform");
-            return;
+    const meta = platforms[platform];
+    if (!meta) {
+        console.error("Unknown platform", platform);
+        return;
     }
+
+    const url = platform === "interpark"
+        ? getInterparkBookingUrl(concertId)
+        : config.formatUrl(meta.urls && meta.urls.start, { id: concertId });
 
     if (!url) {
         console.error("Missing or invalid booking URL/config for", platform, concertId);
@@ -278,28 +249,19 @@ function getInterparkBookingUrl(concertId) {
 
     const queryPlaceMatch = value.match(/^(\d+)\?placeCode=(\d+)$/i);
     if (queryPlaceMatch) {
-        return `https://world.nol.com/zh-CN/ticket/genre/CONCERT/products/${queryPlaceMatch[1]}?placeCode=${queryPlaceMatch[2]}`;
+        return config.formatUrl(platforms.interpark.urls.productByQuery, { productId: queryPlaceMatch[1], placeId: queryPlaceMatch[2] });
     }
 
     const pairMatch = value.match(/(?:places\/)?(\d+)[/:|, -]+(?:products\/)?(\d+)/i);
     if (pairMatch) {
-        return `https://world.nol.com/zh-CN/ticket/places/${pairMatch[1]}/products/${pairMatch[2]}`;
+        return config.formatUrl(platforms.interpark.urls.productByPlace, { placeId: pairMatch[1], productId: pairMatch[2] });
     }
 
     return "";
 }
 
 function getPlatformFormPath(platform) {
-    switch (platform) {
-        case "melon":
-            return "melonticketForm/melonticket.html";
-        case "yes24":
-            return "yes24Form/yes24.html";
-        case "interpark":
-            return "interparkForm/interpark.html";
-        default:
-            return "form/form.html";
-    }
+    return platforms[platform] && platforms[platform].form || "form/form.html";
 }
 
 async function deleteConcertItem(index) {
@@ -319,18 +281,49 @@ async function deleteConcertItem(index) {
 }
 
 function getPlatformImageSrc(platform) {
-    switch (platform) {
-        case "melon":
-            return "../../assets/melonticket_logo.png";
-        case "yes24":
-            return "../../assets/yes24_logo.png";
-        case "interpark":
-            return "../../assets/interpark_logo.png";
-        case "thaiticket":
-            return "../../assets/thaiticketmajor_logo.png";
-        default:
-            return "";
-    }
+    const logo = platforms[platform] && platforms[platform].logo;
+    return logo ? `../../${logo}` : "";
+}
+
+// 测试提示音：确认电脑音量和声音通道正常（走后台 offscreen 播放，与购票页一致）。
+const soundTestButton = document.getElementById("sound-test");
+if (soundTestButton && window.TicketBotSound) {
+    soundTestButton.addEventListener("click", async() => {
+        const volume = Number(config.runtime && config.runtime.soundVolume) || 0.6;
+        const played = await window.TicketBotSound.play("takeover", { volume, repeat: 1 });
+        soundTestButton.textContent = played ? "🔔 已播放，听到了吗？" : "🔇 播放失败，请检查插件权限";
+        setTimeout(() => { soundTestButton.textContent = "🔔 测试提示音"; }, 2500);
+    });
+}
+
+// 运行记录：导出给 Agent 分析卡点（流程见 docs/incidents.md），复现问题前可以先清空。
+const journalExportButton = document.getElementById("journal-export");
+const journalClearButton = document.getElementById("journal-clear");
+if (journalExportButton && window.TicketBotJournal) {
+    journalExportButton.addEventListener("click", async() => {
+        const entries = await window.TicketBotJournal.read();
+        const payload = {
+            exportedAt: new Date().toISOString(),
+            extensionVersion: chrome.runtime.getManifest().version,
+            count: entries.length,
+            unhandled: entries.filter(entry => entry.type === "unhandled").length,
+            entries,
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `ticket-bot-journal-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+    });
+}
+if (journalClearButton && window.TicketBotJournal) {
+    journalClearButton.addEventListener("click", async() => {
+        if (!confirm("清空所有运行记录？")) return;
+        await window.TicketBotJournal.clear();
+        journalClearButton.textContent = "🧹 已清空";
+        setTimeout(() => { journalClearButton.textContent = "🧹 清空"; }, 2000);
+    });
 }
 
 loadAutoBooking();

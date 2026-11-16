@@ -7,11 +7,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="style.css">
     <script src="../../config/config.js"></script>
+    <script src="../../scripts/common/sound.js"></script>
+    <script src="../../scripts/common/journal.js"></script>
     <script type="module" src="script.js"></script>
 </head>
 
 <body>
     <h1 class="main-color">EasyConcert</h1>
+    <div class="sound-test-row">
+        <button type="button" id="journal-export" class="sound-test" title="导出最近的运行记录（JSON），交给 Agent 分析卡点">📄 导出运行记录</button>
+        <button type="button" id="journal-clear" class="sound-test" title="清空运行记录，复现问题前可以先清空">🧹 清空</button>
+        <button type="button" id="sound-test" class="sound-test">🔔 测试提示音</button>
+    </div>
     <div class="button-row">
         <a href="../melonticketForm/melonticket.html" class="button-concert">
             <img src="../../assets/melonticket_logo.png" alt="melonticket">
@@ -24,10 +31,6 @@
         <a href="../interparkForm/interpark.html" class="button-concert">
             <img src="../../assets/interpark_logo.png" alt="Interpark">
             <div class="booking-site">Interpark</div>
-        </a>
-        <a href="../thaiticketForm/thaiticket.html" class="button-concert">
-            <img src="../../assets/thaiticketmajor_logo.png" alt="ThaiTicketMajor">
-            <div class="booking-site">ThaiTicket</div>
         </a>
     </div>
     <div class="list-booking-container" id="list-booking">

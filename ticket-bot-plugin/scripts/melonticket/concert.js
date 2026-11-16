@@ -1,159 +1,133 @@
-let botRunning = false;
+/*
+ * Melon 演出详情页：等待开售 -> 选日期 -> 选场次 -> 点击预约。
+ * 点击预约后会打开选座弹窗（onestop.htm），本页交接给 scripts/melonticket/seat.js。
+ * 启停/接管/通知由 scripts/common/runtime.js 统一处理，这里只写页面步骤。
+ */
+(function() {
+    const PLATFORM = "melon";
+    const STATE = {
+        WAIT_OPEN: "wait_open",
+        SELECT_DATE: "select_date",
+        SELECT_TIME: "select_time",
+        RESERVE: "reserve",
+    };
 
-function getConcertId() {
-    return document.getElementById("prodIdNum").value;
-}
+    const bot = TicketBotRuntime.createBot({
+        platform: PLATFORM,
+        getConcertId,
+        matchesConfig: config => matchesConcert(config),
+        // 开售前可能等很久，不做卡住检测。
+        stallTimeouts: { [STATE.WAIT_OPEN]: 0 },
+        states: [
+            { key: STATE.WAIT_OPEN, label: "等待开售" },
+            { key: STATE.SELECT_DATE, label: "选择日期" },
+            { key: STATE.SELECT_TIME, label: "选择场次" },
+            { key: STATE.RESERVE, label: "点击预约 → 选座弹窗" },
+        ],
+        onStart: runFlow,
+    });
+    const ctx = bot.ctx;
 
-async function waitForChildren(id, timeoutMs = 3000, intervalMs = 100) {
-    const deadline = Date.now() + timeoutMs;
-    let element = document.getElementById(id);
-    while ((!element || element.childElementCount === 0) && Date.now() < deadline) {
-        await sleep(intervalMs);
-        element = document.getElementById(id);
+    function getConcertId() {
+        const input = document.getElementById("prodIdNum");
+        return input ? input.value : new URLSearchParams(location.search).get("prodId") || "";
     }
-    return element;
-}
 
-async function select_day(day) {
-    let daysAvaible = await waitForChildren("list_date");
-    if (!daysAvaible) return;
-
-    let num = daysAvaible.childElementCount;
-    if (num <= 1) return;
-
-    for (let i = 0; i < num; i++) {
-        let dayElement = daysAvaible.children[i];
-        if (dayElement.getAttribute("data-perfday") == day) {
-            dayElement.children[0].click();
-            return;
+    function normalizeConcertId(value) {
+        const text = String(value || "").trim();
+        if (!/^https?:\/\//i.test(text)) return text;
+        try {
+            return new URL(text).searchParams.get("prodId") || text;
+        } catch (error) {
+            return text;
         }
     }
-    return;
-}
 
-async function select_time(time) {
-    let timesAvaible = await waitForChildren("list_time");
-    if (!timesAvaible) return;
+    function matchesConcert(config) {
+        const target = normalizeConcertId(config && config["concert-id"]);
+        const current = getConcertId();
+        return !target || !current || target === current;
+    }
 
-    let num = timesAvaible.childElementCount;
-    if (num <= 1) return;
+    // ---------- 页面元素操作 ----------
 
-    for (let i = 0; i < num; i++) {
-        let timeElement = timesAvaible.children[i];
-        if (timeElement.children[0].children[0].innerHTML.includes(time)) {
-            timeElement.children[0].click();
-            return;
+    async function waitForChildren(id, timeoutMs, intervalMs = 100) {
+        const deadline = Date.now() + timeoutMs;
+        let element = document.getElementById(id);
+        while ((!element || element.childElementCount === 0) && Date.now() < deadline) {
+            await ctx.sleep(intervalMs);
+            element = document.getElementById(id);
+        }
+        return element;
+    }
+
+    function isPlaceOpen() {
+        const box = document.getElementsByClassName("box_ticketing_process")[0];
+        return !!box && box.style.display !== "none";
+    }
+
+    async function selectDay(day) {
+        const list = await waitForChildren("list_date", ctx.num("elementWaitTimeoutMs", 3000));
+        if (!list || list.childElementCount <= 1) return;
+        for (const item of list.children) {
+            if (item.getAttribute("data-perfday") == day) {
+                item.children[0].click();
+                return;
+            }
         }
     }
-    return;
-}
 
-async function isPlaceOpen() {
-    let selector = document.getElementsByClassName("box_ticketing_process")[0];
-    
-    if (selector.style.display == "none") {
-        return false;
-    }
-    return true;
-}
-
-async function searchConcert(startConfig) {
-    let concertId = getConcertId();
-    let data = startConfig || await get_stored_value(concertId);
-
-    if (!botRunning || !data) {
-        return;
-    }
-    if (!await isPlaceOpen()) {
-        console.log("not open");
-        await sleep(200);
-        searchConcert(data);
-        return;
-    }
-    await sleep(500);
-    if (!botRunning) {
-        return;
-    }
-    await select_day(data.date.replaceAll("-", ""));
-    await sleep(500);
-    await select_time(formatTime(data.time));
-    await sleep(500);
-
-    await sleep(5000);
-    
-    document.getElementsByClassName("reservationBtn")[0].click();
-
-
-    console.log("clicked reservation");
-}
-
-function simulateMouseEvent(element, eventType) {
-    const event = new MouseEvent(eventType, {
-        bubbles: true,
-        cancelable: true,
-        isTrusted: true,
-    });
-
-    element.dispatchEvent(event);
-}
-
-function startBot(config) {
-    if (botRunning) {
-        return;
+    async function selectTime(time) {
+        const list = await waitForChildren("list_time", ctx.num("elementWaitTimeoutMs", 3000));
+        if (!list || list.childElementCount <= 1) return;
+        for (const item of list.children) {
+            const label = item.children[0] && item.children[0].children[0];
+            if (label && label.innerHTML.includes(time)) {
+                item.children[0].click();
+                return;
+            }
+        }
     }
 
-    botRunning = true;
-    searchConcert(config);
-}
+    // ---------- 流程 ----------
 
-function stopBot() {
-    botRunning = false;
-    markRunStateStopped();
-    console.log("[Melon] Concert bot stopped.");
-}
+    async function runFlow(ctx, gen) {
+        const data = ctx.config;
+        ctx.setState(STATE.WAIT_OPEN);
+        while (!isPlaceOpen()) {
+            if (!ctx.isActive(gen)) return;
+            ctx.status("等待开售");
+            await ctx.sleep(ctx.num("concertOpenRetryMs", 200));
+        }
 
-function markRunStateStopped() {
-    const storageKeys = window.TicketBotConfig && window.TicketBotConfig.storageKeys;
-    const runStateKey = storageKeys ? storageKeys.botRunState : "ticketBotRunState";
-    store_value(runStateKey, {
-        running: false,
-        platform: "melon",
-        concertId: getConcertId(),
-    });
-}
+        const actionDelay = ctx.num("concertActionDelayMs", 500);
+        await ctx.sleep(actionDelay);
+        if (!ctx.isActive(gen)) return;
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    const actions = window.TicketBotConfig && window.TicketBotConfig.actions;
-    const startAction = actions ? actions.startBot : "startTicketBot";
-    const stopAction = actions ? actions.stopBot : "stopTicketBot";
+        ctx.setState(STATE.SELECT_DATE, data.date || "");
+        await selectDay(String(data.date || "").replaceAll("-", ""));
+        await ctx.sleep(actionDelay);
+        if (!ctx.isActive(gen)) return;
 
-    if (request.action === startAction && (!request.platform || request.platform === "melon")) {
-        startBot(request.config);
-        sendResponse({ status: "started" });
-        return true;
+        ctx.setState(STATE.SELECT_TIME, data.time || "");
+        if (data.time) {
+            await selectTime(formatTime(data.time));
+        }
+        await ctx.sleep(actionDelay);
+
+        ctx.setState(STATE.RESERVE);
+        ctx.status("准备点击预约");
+        await ctx.sleep(ctx.num("reservationClickDelayMs", 5000));
+        if (!ctx.isActive(gen)) return;
+
+        const button = document.getElementsByClassName("reservationBtn")[0];
+        if (!button) {
+            await ctx.pause("没有找到预约按钮，请手动操作");
+            return;
+        }
+        button.click();
+        ctx.handoff("已点击预约，选座弹窗接管后续流程");
     }
 
-    if (request.action === stopAction && (!request.platform || request.platform === "melon")) {
-        stopBot();
-        sendResponse({ status: "stopped" });
-        return true;
-    }
-});
-
-async function startFromRunState() {
-    const storageKeys = window.TicketBotConfig && window.TicketBotConfig.storageKeys;
-    const runStateKey = storageKeys ? storageKeys.botRunState : "ticketBotRunState";
-    const runState = await get_stored_value(runStateKey);
-    if (!runState || !runState.running || runState.platform !== "melon") {
-        return;
-    }
-
-    const currentConcertId = getConcertId();
-    if (runState.concertId && currentConcertId && runState.concertId !== currentConcertId) {
-        return;
-    }
-
-    startBot(runState.config);
-}
-
-startFromRunState();
+    bot.autoStart();
+})();

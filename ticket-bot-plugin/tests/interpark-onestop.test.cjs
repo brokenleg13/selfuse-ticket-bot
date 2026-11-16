@@ -5,6 +5,8 @@ const path = require('node:path');
 const root = path.join(__dirname, '..');
 const { JSDOM } = require('jsdom');
 const source = fs.readFileSync(path.join(root, 'scripts/interpark/seat.js'), 'utf8');
+const runtimeSource = fs.readFileSync(path.join(root, 'scripts/common/runtime.js'), 'utf8');
+const captchaSource = fs.readFileSync(path.join(root, 'scripts/common/captcha-client.js'), 'utf8');
 
 function page(html, config = {}, route = 'schedule') {
     const dom = new JSDOM(html, { url: `https://tickets.interpark.com/onestop/${route}`, runScripts: 'outside-only' });
@@ -15,6 +17,10 @@ function page(html, config = {}, route = 'schedule') {
     window.get_stored_value = async () => null;
     window.store_value = async () => {};
     window.console.log = () => {};
+    window.eval(captchaSource);
+    window.eval(fs.readFileSync(path.join(root, 'scripts/common/sound.js'), 'utf8'));
+    window.eval(fs.readFileSync(path.join(root, 'scripts/common/status-panel.js'), 'utf8'));
+    window.eval(runtimeSource);
     window.eval(source.replace('    startFromRunState();', `
         window.testApi = { selectOnestopSchedule, parseOnestopTime, clickOnestopElement, clickNolBuyButton,
             isCaptchaVisible, findCaptchaImageElement, findCaptchaInputElement,

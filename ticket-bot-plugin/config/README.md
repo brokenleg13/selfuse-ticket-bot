@@ -3,8 +3,18 @@
 This directory keeps shared extension configuration and documents local
 sensitive overrides.
 
-- `config.js`: non-sensitive runtime constants shared by popup and content
-  scripts.
+- `config.js`: the single source of non-sensitive configuration shared by popup
+  and content scripts:
+  - `runtime`: framework defaults (stall timeout, page alert checks, Feishu
+    event filter, status panel).
+  - `interpark` / `melon` / `yes24`: per-platform defaults. A value filled in a
+    booking card overrides the default with the same key.
+  - `platforms.<platform>`: label, logo, form page, site/API URLs,
+    `rules` (incident rules, see docs/incidents.md), and `fields` used to generate the card form.
+  - `commonFields`: advanced fields shown on every platform card.
+
+To add a tunable parameter: add its default under the platform, add a `fields`
+entry, then read it in the script with `ctx.num("key", fallback)`.
 - `local.json`: optional local-only notes or copied values. It is ignored by
   git and is not loaded by the extension.
 
@@ -21,25 +31,13 @@ scripts.
 
 The script leaves account-fixed fields alone, including name, birthday, and email.
 
-## Local GLM-OCR Captcha Service
+## Captcha Service
 
-Interpark captcha OCR is configured in `config.js`:
+The captcha recognition service is configured under `services.captcha`
+(`baseUrl`, `endpoints`, `headers`, `timeoutMs`, `provider`) and called through
+`scripts/common/captcha-client.js`. Page-specific behaviour, such as Interpark's
+retry counts and confidence threshold, lives under `interpark.captchaOcr`.
 
-- `interpark.captchaOcr.enabled`: try local OCR before waiting for manual input.
-- `interpark.captchaOcr.serviceUrl`: default `http://127.0.0.1:17861/ocr`.
-- `interpark.captchaOcr.sliderServiceUrl`: default `http://127.0.0.1:17861/slider`.
-- `interpark.captchaOcr.timeoutMs`: request timeout. Keep this short so manual
-  input remains the fallback when the service is not running.
-- `interpark.captchaOcr.sliderConfidence`: confidence threshold for slider gap
-  detection, default `0.7`.
-- `interpark.captchaOcr.codeLength`: current captcha length, default `6`.
-
-Start the local service from the repository root:
-
-```powershell
-.\local-services\start_glm_ocr_service.ps1
-```
-
-When a slider captcha appears and local slider OCR is missing, unavailable, or
-returns a low-confidence/invalid box, the Interpark bot pauses and sends the
-configured Feishu webhook notification with the failure reason.
+See [docs/captcha-service.md](../../docs/captcha-service.md) for the API
+contract, deployment, swapping in another OCR backend, and how to hook a page
+up to it.

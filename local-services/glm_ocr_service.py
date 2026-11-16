@@ -1,8 +1,10 @@
-"""Local GLM-OCR captcha service.
+"""Local captcha recognition service (ticket-bot-captcha API v1).
 
-Runs a small HTTP API around zai-org/GLM-OCR using Transformers directly.
-The Chrome extension can call this service on localhost; if it is not running,
-the extension falls back to manual captcha entry.
+Runs a small HTTP API around zai-org/GLM-OCR (text captchas) and
+captcha-recognizer (slider captchas). It is a generic, page-agnostic service:
+callers decide when a captcha appears, which image to send and what to do with
+the result. The API contract is documented in docs/captcha-service.md; any other
+OCR backend that implements the same endpoints can replace this service.
 """
 
 from __future__ import annotations
@@ -32,14 +34,34 @@ else:
 
 
 DEFAULT_MODEL = "zai-org/GLM-OCR"
+API_VERSION = "ticket-bot-captcha/1"
 DEFAULT_PROMPT = (
     "Read the captcha. It contains exactly six uppercase English letters and no digits. "
     "Return only the 6 letters."
 )
+CHARSETS = {
+    "upper": (r"[A-Z]", "uppercase English letters and no digits"),
+    "alpha": (r"[A-Za-z]", "English letters and no digits"),
+    "digits": (r"[0-9]", "digits only"),
+    "alnum": (r"[A-Za-z0-9]", "English letters and digits"),
+    "any": (r"\S", "characters"),
+}
 
 
-def normalize_code(text: str, length: int = 6) -> str:
-    return "".join(re.findall(r"[A-Z]", (text or "").upper()))[:length]
+def build_prompt(length: int, charset: str) -> str:
+    description = CHARSETS.get(charset, CHARSETS["upper"])[1]
+    if length > 0:
+        return f"Read the captcha. It contains exactly {length} {description}. Return only the {length} characters."
+    return f"Read the captcha. It contains {description}. Return only the captcha characters."
+
+
+def normalize_code(text: str, length: int = 6, charset: str = "upper") -> str:
+    pattern = CHARSETS.get(charset, CHARSETS["upper"])[0]
+    value = text or ""
+    if charset == "upper":
+        value = value.upper()
+    code = "".join(re.findall(pattern, value))
+    return code[:length] if length > 0 else code
 
 
 def decode_image_bytes(image_value: str) -> bytes:
@@ -99,7 +121,14 @@ class GlmOcrRecognizer:
         self.model.eval()
         self.load_seconds = time.perf_counter() - started
 
-    def recognize(self, image: Image.Image, prompt: str | None = None) -> dict[str, Any]:
+    def recognize(
+        self,
+        image: Image.Image,
+        prompt: str | None = None,
+        code_length: int | None = None,
+        charset: str = "upper",
+    ) -> dict[str, Any]:
+        length = self.code_length if code_length is None else code_length
         messages = [{
             "role": "user",
             "content": [
@@ -133,9 +162,9 @@ class GlmOcrRecognizer:
         generated = output[:, prompt_length:]
         raw_text = self.processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
         elapsed = time.perf_counter() - started
-        code = normalize_code(raw_text, self.code_length)
+        code = normalize_code(raw_text, length, charset)
         return {
-            "ok": len(code) == self.code_length,
+            "ok": len(code) == length if length > 0 else len(code) > 0,
             "text": code,
             "rawText": raw_text,
             "elapsedMs": round(elapsed * 1000),
@@ -279,6 +308,11 @@ def make_handler(
             if request_path == "/health":
                 self.write_json({
                     "ok": True,
+                    "api": API_VERSION,
+                    "capabilities": [name for name, enabled in (
+                        ("ocr", recognizer is not None),
+                        ("slider", slider_recognizer is not None),
+                    ) if enabled],
                     "glmEnabled": recognizer is not None,
                     "model": recognizer.model_name if recognizer else None,
                     "loadMs": round(recognizer.load_seconds * 1000) if recognizer else 0,
@@ -315,11 +349,18 @@ def make_handler(
             try:
                 payload = self.read_payload()
                 image = decode_image(payload.get("image") or payload.get("dataUrl") or "")
+                # 每个请求可以指定长度/字符集/提示词；不传时沿用启动参数（默认 6 位大写字母）。
+                length = int(payload.get("codeLength") if payload.get("codeLength") not in (None, "") else code_length)
+                charset = payload.get("charset") or "upper"
+                if charset not in CHARSETS:
+                    raise ValueError(f"Unsupported charset: {charset}")
                 prompt = payload.get("prompt")
-                result = recognizer.recognize(image, prompt)
-                if len(result["text"]) != code_length:
+                if not prompt and (length != 6 or charset != "upper"):
+                    prompt = build_prompt(length, charset)
+                result = recognizer.recognize(image, prompt, length, charset)
+                if length > 0 and len(result["text"]) != length:
                     result["ok"] = False
-                    result["error"] = f"Expected {code_length} letters, got {len(result['text'])}."
+                    result["error"] = f"Expected {length} letters, got {len(result['text'])}."
                 self.write_json(result)
             except Exception as error:  # pragma: no cover - runtime diagnostics
                 self.write_json({

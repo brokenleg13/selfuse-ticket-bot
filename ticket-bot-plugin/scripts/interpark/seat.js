@@ -31,6 +31,34 @@
         STOPPED: "stopped",
     };
 
+    // ---------- 生命周期（由 scripts/common/runtime.js 统一管理） ----------
+    // 开始/继续 -> runFlow；停止/暂停/接管 -> haltFlow。消息监听、运行状态同步、
+    // 状态小框和飞书推送都在 runtime 里，这里只保留 Interpark 的业务入口。
+    const bot = window.TicketBotRuntime.createBot({
+        platform: PLATFORM,
+        getConcertId: () => getCurrentProductId(),
+        matchesConfig: botConfig => isMatchingBooking(botConfig),
+        // 排队页可能长时间无变化，不做卡住检测；等人工输入验证码时也不检测。
+        stallTimeouts: { [BOT_STATE.QUEUE_WAITING]: 0, [BOT_STATE.CAPTCHA]: 0 },
+        // 状态机：显示在右下角状态小框（新版 onestop 与旧版 BookMain 共用这套状态）
+        states: [
+            { key: BOT_STATE.STARTING, label: "启动", step: false },
+            { key: BOT_STATE.PRODUCT_PAGE, label: "演出页 · 点击购买" },
+            { key: BOT_STATE.QUEUE_WAITING, label: "排队等待" },
+            { key: BOT_STATE.BOOKING_PAGE, label: "进入订购页" },
+            { key: BOT_STATE.DATE_TIME, label: "选择日期/场次" },
+            { key: BOT_STATE.CAPTCHA, label: "验证码" },
+            { key: BOT_STATE.SCANNING, label: "刷座位" },
+            { key: BOT_STATE.LOCKED, label: "锁座成功" },
+            { key: BOT_STATE.SELECTED, label: "选座完成 · 票价/确认" },
+            { key: BOT_STATE.RESTARTING, label: "订购页超时重开", step: false },
+            { key: BOT_STATE.STOPPED, label: "已停止", step: false },
+            { key: BOT_STATE.IDLE, label: "未运行", step: false },
+        ],
+        onStart: ctx => runFlow(ctx.config),
+        onHalt: haltFlow,
+    });
+
     let botRunning = false;
     let activeConfig = null;
     let refreshTimer = null;
@@ -74,12 +102,6 @@
         return String(value || "").replace(/[^\d]/g, "").slice(0, 4);
     }
 
-    function notifyFeishu(message) {
-        const webhookUrl = activeConfig && activeConfig["feishu-bot-id"];
-        if (webhookUrl && typeof sendFeiShuMsg === "function") {
-            sendFeiShuMsg(webhookUrl, `[${new Date().toLocaleString()}] ${message}`);
-        }
-    }
 
     function formatSeatBrief(seat) {
         if (!seat) {
@@ -110,22 +132,24 @@
         return list.length ? list.join("；") : "未读取到具体座位号";
     }
 
-    function notifySelectedSeats(prefix, seats) {
-        notifyFeishu(`${prefix}：${formatSeatList(seats)}`);
-    }
-
+    // 锁座失败会自动重试，只显示在状态小框，不推送飞书。
     function notifySeatLockFailed(reason, seats) {
-        const detail = reason ? `，原因：${reason}` : "";
-        notifySelectedSeats(`Interpark 锁座失败${detail}`, seats);
+        updateStatus(`锁座失败${reason ? `（${reason}）` : ""}：${formatSeatList(seats)}`);
     }
 
+    // 关键结果：推送 success 并停止。
+    async function finishWithSuccess(title, seats) {
+        bot.ctx.config = activeConfig || bot.ctx.config;
+        await bot.ctx.success(`${title}：${formatSeatList(seats)}`);
+    }
+
+    // 流程需要人工处理时停止并推送（stop 事件）。用户确认后从插件或状态小框重新开始。
     async function pauseBotWithNotification(message) {
         botRunning = false;
         clearTimeout(refreshTimer);
-        await markRunStateStopped();
-        setBotState(BOT_STATE.STOPPED);
         updateStatus(message);
-        notifyFeishu(`Interpark 已暂停：${message}`);
+        bot.ctx.config = activeConfig || bot.ctx.config;
+        await bot.ctx.stop(message);
     }
 
     function setBotState(nextState, detail) {
@@ -134,7 +158,7 @@
         }
 
         botState = nextState;
-        console.log(`[Interpark] state -> ${nextState}${detail ? `: ${detail}` : ""}`);
+        bot.ctx.setState(nextState, detail);
     }
 
     function getConfiguredProductUrl(botConfig) {
@@ -223,11 +247,11 @@
 
     async function syncRunStateConfig() {
         const runState = await get_stored_value(getRunStateKey());
-        if (!runState || !runState.running || runState.platform !== PLATFORM) {
+        if (!runState || !runState.running || runState.paused || runState.platform !== PLATFORM) {
             botRunning = false;
             clearTimeout(refreshTimer);
             setBotState(BOT_STATE.STOPPED);
-            updateStatus("Stopped by current run state.");
+            updateStatus("运行状态已停止");
             return false;
         }
 
@@ -275,8 +299,6 @@
     function getCaptchaOcrOptions() {
         return {
             enabled: captchaOcrConfig.enabled !== false,
-            serviceUrl: captchaOcrConfig.serviceUrl || "http://127.0.0.1:17861/ocr",
-            sliderServiceUrl: captchaOcrConfig.sliderServiceUrl || "http://127.0.0.1:17861/slider",
             timeoutMs: Number(captchaOcrConfig.timeoutMs) || 3000,
             retryIntervalMs: Number(captchaOcrConfig.retryIntervalMs) || 8000,
             maxAttempts: Math.max(1, Number(captchaOcrConfig.maxAttempts) || 3),
@@ -570,7 +592,7 @@
             canvas.getContext("2d").drawImage(image, 0, 0, width, height);
             return canvas.toDataURL("image/png");
         } catch (error) {
-            updateStatus(`Captcha image read failed; using screenshot crop (${error.message || error}).`);
+            updateStatus(`读取验证码图片失败，改用截图裁剪：${error.message || error}`);
             return captureElementAsDataUrl(image);
         }
     }
@@ -580,92 +602,67 @@
         return `${value.length}:${value.slice(0, 48)}:${value.slice(-48)}`;
     }
 
+    // 识别请求走公共客户端 TicketBotCaptcha（scripts/common/captcha-client.js），
+    // 何时识别、读哪张图、回填和重试仍由本脚本负责。
     async function requestCaptchaOcr(dataUrl, options) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-        try {
-            const response = await fetch(options.serviceUrl, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    image: dataUrl,
-                    codeLength: options.codeLength,
-                }),
-                signal: controller.signal,
-            });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok || !payload.ok) {
-                throw new Error(payload.error || `OCR service returned ${response.status}`);
-            }
-            const code = normalizeCaptchaCode(payload.text || payload.rawText, options.codeLength);
-            if (code.length !== options.codeLength) {
-                throw new Error(`OCR result is not ${options.codeLength} letters: ${payload.text || payload.rawText || ""}`);
-            }
-            return {
-                code,
-                elapsedMs: payload.elapsedMs,
-                rawText: payload.rawText,
-            };
-        } finally {
-            clearTimeout(timeout);
+        const payload = await window.TicketBotCaptcha.recognizeText(dataUrl, {
+            codeLength: options.codeLength,
+            charset: "upper",
+            timeoutMs: options.timeoutMs,
+        });
+        if (!payload.ok) {
+            throw new Error(payload.error || "OCR service failed");
         }
+        const code = normalizeCaptchaCode(payload.text || payload.rawText, options.codeLength);
+        if (code.length !== options.codeLength) {
+            throw new Error(`OCR result is not ${options.codeLength} letters: ${payload.text || payload.rawText || ""}`);
+        }
+        return {
+            code,
+            elapsedMs: payload.elapsedMs,
+            rawText: payload.rawText,
+        };
     }
 
     async function requestSliderCaptchaRecognition(dataUrl, options) {
         const dataImage = await loadImageDataUrl(dataUrl);
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
-        try {
-            const response = await fetch(options.sliderServiceUrl, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    image: dataUrl,
-                    conf: options.sliderConfidence,
-                }),
-                signal: controller.signal,
-            });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok || !payload.ok) {
-                throw new Error(payload.error || `Slider OCR service returned ${response.status}`);
-            }
-
-            const confidence = Number(payload.confidence) || 0;
-            if (confidence < options.sliderConfidence) {
-                throw new Error(`Slider OCR confidence too low: ${confidence.toFixed(4)} < ${options.sliderConfidence}`);
-            }
-
-            const box = Array.isArray(payload.box) ? payload.box.map(Number) : [];
-            if (box.length !== 4 || box.some(value => !Number.isFinite(value))) {
-                throw new Error(`Slider OCR result missing valid box: ${JSON.stringify(payload).slice(0, 160)}`);
-            }
-
-            const boxWidth = Number(payload.width ?? (box[2] - box[0]));
-            const boxHeight = Number(payload.height ?? (box[3] - box[1]));
-            if (!Number.isFinite(boxWidth) || !Number.isFinite(boxHeight) || boxWidth <= 1 || boxHeight <= 1) {
-                throw new Error(`Slider OCR returned invalid box size: ${JSON.stringify(box)}`);
-            }
-
-            const gapLeft = Number(payload.x ?? (Array.isArray(payload.box) ? payload.box[0] : NaN));
-            if (!Number.isFinite(gapLeft) || gapLeft <= 0) {
-                throw new Error(`Slider OCR result missing gap left: ${JSON.stringify(payload).slice(0, 160)}`);
-            }
-
-            return {
-                gapLeft,
-                confidence,
-                elapsedMs: payload.elapsedMs,
-                imageWidth: dataImage.naturalWidth || dataImage.width || 1,
-                imageHeight: dataImage.naturalHeight || dataImage.height || 1,
-                raw: payload,
-            };
-        } finally {
-            clearTimeout(timeout);
+        const payload = await window.TicketBotCaptcha.detectSliderGap(dataUrl, {
+            conf: options.sliderConfidence,
+            timeoutMs: options.timeoutMs,
+        });
+        if (!payload.ok) {
+            throw new Error(payload.error || "Slider OCR service failed");
         }
+
+        const confidence = Number(payload.confidence) || 0;
+        if (confidence < options.sliderConfidence) {
+            throw new Error(`Slider OCR confidence too low: ${confidence.toFixed(4)} < ${options.sliderConfidence}`);
+        }
+
+        const box = Array.isArray(payload.box) ? payload.box.map(Number) : [];
+        if (box.length !== 4 || box.some(value => !Number.isFinite(value))) {
+            throw new Error(`Slider OCR result missing valid box: ${JSON.stringify(payload).slice(0, 160)}`);
+        }
+
+        const boxWidth = Number(payload.width ?? (box[2] - box[0]));
+        const boxHeight = Number(payload.height ?? (box[3] - box[1]));
+        if (!Number.isFinite(boxWidth) || !Number.isFinite(boxHeight) || boxWidth <= 1 || boxHeight <= 1) {
+            throw new Error(`Slider OCR returned invalid box size: ${JSON.stringify(box)}`);
+        }
+
+        const gapLeft = Number(payload.x ?? (Array.isArray(payload.box) ? payload.box[0] : NaN));
+        if (!Number.isFinite(gapLeft) || gapLeft <= 0) {
+            throw new Error(`Slider OCR result missing gap left: ${JSON.stringify(payload).slice(0, 160)}`);
+        }
+
+        return {
+            gapLeft,
+            confidence,
+            elapsedMs: payload.elapsedMs,
+            imageWidth: dataImage.naturalWidth || dataImage.width || 1,
+            imageHeight: dataImage.naturalHeight || dataImage.height || 1,
+            raw: payload,
+        };
     }
 
     function isInvalidCaptchaOcrError(error) {
@@ -821,11 +818,11 @@
         clearCaptchaInput();
         captchaOcrState.lastImageKey = "";
         if (!refresh) {
-            updateCaptchaOcrStatus(`Captcha refresh button not found after ${reason}; waiting for manual input.`);
+            updateCaptchaOcrStatus(`${reason}，且找不到刷新按钮，请手动输入验证码`);
             return false;
         }
 
-        updateStatus(`Captcha ${reason}; refreshing image.`);
+        updateStatus(`${reason}，刷新验证码`);
         await clickElement(refresh);
         await delay(options.invalidRefreshDelayMs);
         return true;
@@ -905,6 +902,10 @@
             return;
         }
         captchaOcrState.lastMessage = message;
+        if (/请手动/.test(message)) {
+            // 需要人接管：提示音 + 推送 + 小框高亮（同一状态只提醒一次）
+            bot.ctx.needHuman("验证码需要手动输入");
+        }
         updateStatus(message);
     }
 
@@ -925,7 +926,7 @@
             const image = findCaptchaImageElement();
             const input = findCaptchaInputElement();
             if (!image || !input) {
-                updateCaptchaOcrStatus("Captcha OCR skipped: image or input not found; waiting for manual input.");
+                updateCaptchaOcrStatus("找不到验证码图片或输入框，请手动输入验证码");
                 return false;
             }
 
@@ -934,21 +935,21 @@
                 const currentImage = findCaptchaImageElement();
                 const currentInput = findCaptchaInputElement();
                 if (!currentImage || !currentInput) {
-                    updateCaptchaOcrStatus("Captcha OCR skipped: image or input not found; waiting for manual input.");
+                    updateCaptchaOcrStatus("找不到验证码图片或输入框，请手动输入验证码");
                     return false;
                 }
 
                 const dataUrl = await imageElementToDataUrl(currentImage);
-                updateStatus(`Captcha detected; calling local GLM-OCR service (${attempt}/${options.maxAttempts}).`);
+                updateStatus(`识别验证码（第 ${attempt}/${options.maxAttempts} 次）`);
                 let result;
                 try {
                     result = await requestCaptchaOcr(dataUrl, options);
                 } catch (error) {
                     if (isInvalidCaptchaOcrError(error)) {
-                        if (attempt < options.maxAttempts && await refreshCaptcha("OCR returned invalid text", options)) {
+                        if (attempt < options.maxAttempts && await refreshCaptcha("识别结果无效", options)) {
                             continue;
                         }
-                        updateCaptchaOcrStatus(`Captcha OCR returned invalid text after ${attempt} attempt(s); waiting for manual input.`);
+                        updateCaptchaOcrStatus(`识别 ${attempt} 次都不是有效验证码，请手动输入验证码`);
                         return false;
                     }
                     throw error;
@@ -957,30 +958,30 @@
                 captchaOcrState.lastImageKey = getDataUrlKey(dataUrl);
                 if (!botRunning || !currentInput.isConnected || !isCaptchaVisible()) return false;
                 setInputValue(currentInput, result.code);
-                updateStatus(`Captcha OCR filled ${result.code}${result.elapsedMs ? ` (${result.elapsedMs}ms)` : ""}; submitting.`);
+                updateStatus(`已填写验证码 ${result.code}${result.elapsedMs ? `（${result.elapsedMs}ms）` : ""}，提交中`);
                 await submitCaptchaInput(currentInput);
 
                 const verification = await waitForCaptchaResult(options);
                 if (verification.solved) {
-                    updateStatus("Captcha verified.");
+                    updateStatus("验证码已通过");
                     return true;
                 }
 
                 if (verification.errorText) {
-                    if (attempt < options.maxAttempts && await refreshCaptcha(`verification failed (${verification.errorText})`, options)) {
+                    if (attempt < options.maxAttempts && await refreshCaptcha(`验证码错误（${verification.errorText}）`, options)) {
                         continue;
                     }
-                    updateCaptchaOcrStatus(`Captcha verification failed: ${verification.errorText}; waiting for manual input.`);
+                    updateCaptchaOcrStatus(`验证码错误：${verification.errorText}，请手动输入验证码`);
                     return false;
                 }
 
                 return true;
             }
 
-            updateCaptchaOcrStatus("Captcha OCR attempts exhausted; waiting for manual input.");
+            updateCaptchaOcrStatus("自动识别次数已用完，请手动输入验证码");
             return false;
         } catch (error) {
-            updateCaptchaOcrStatus(`Captcha OCR unavailable: ${error.message || error}; waiting for manual input.`);
+            updateCaptchaOcrStatus(`验证码识别服务不可用：${error.message || error}，请手动输入验证码`);
             return false;
         } finally {
             captchaOcrState.attempting = false;
@@ -1011,22 +1012,19 @@
             const slider = findSliderCaptchaElement();
             if (!slider) {
                 captchaOcrState.lastSliderError = "captchSlider not found";
-                updateCaptchaOcrStatus("Slider captcha OCR skipped: captchSlider not found.");
+                updateCaptchaOcrStatus("没有找到滑块验证码，跳过识别");
                 return false;
             }
 
             const dataUrl = await captureElementAsDataUrl(slider, 0);
             const rect = slider.getBoundingClientRect();
-            updateStatus(`Slider captcha detected${areaCode ? ` for area ${areaCode}` : ""}; calling local recognizer.`);
+            updateStatus(`${areaCode ? `区域 ${areaCode} ` : ""}出现滑块验证码，识别中`);
             const result = await requestSliderCaptchaRecognition(dataUrl, options);
             const targetBlockLeft = result.gapLeft * (rect.width / Math.max(1, result.imageWidth));
             if (!Number.isFinite(targetBlockLeft) || targetBlockLeft <= 0 || targetBlockLeft >= rect.width) {
                 throw new Error(`Slider target left out of range: ${targetBlockLeft}`);
             }
-            updateStatus(
-                `Slider gap left ${result.gapLeft.toFixed(2)}px -> ${targetBlockLeft.toFixed(2)} CSS px`
-                + `${result.elapsedMs ? ` (${result.elapsedMs}ms)` : ""}.`,
-            );
+            updateStatus(`滑块缺口 ${result.gapLeft.toFixed(2)}px，拖动到 ${targetBlockLeft.toFixed(2)}px${result.elapsedMs ? `（${result.elapsedMs}ms）` : ""}`);
 
             const dragged = await solveSliderCaptchaInPageWorld(targetBlockLeft);
             if (!dragged) {
@@ -1035,16 +1033,16 @@
             }
 
             if (await waitForSliderCaptchaResult(Math.max(options.submitCheckDelayMs, 3500))) {
-                updateStatus("Slider captcha verified.");
+                updateStatus("滑块验证码已通过");
                 return true;
             }
 
             captchaOcrState.lastSliderError = "slider captcha still visible after drag";
-            updateCaptchaOcrStatus("Slider captcha still visible after drag; waiting for manual input.");
+            updateCaptchaOcrStatus("拖动后滑块验证码仍在，请手动完成");
             return false;
         } catch (error) {
             captchaOcrState.lastSliderError = error.message || String(error);
-            updateCaptchaOcrStatus(`Slider captcha OCR unavailable: ${captchaOcrState.lastSliderError}; waiting for manual input.`);
+            updateCaptchaOcrStatus(`滑块识别不可用：${captchaOcrState.lastSliderError}，请手动完成`);
             return false;
         } finally {
             captchaOcrState.attempting = false;
@@ -1150,13 +1148,13 @@
     async function restartBookingFromProductPage(reason) {
         const targetUrl = getConfiguredProductUrl(activeConfig);
         if (!targetUrl) {
-            updateStatus("Booking session expired, but product URL is not configured.");
+            updateStatus("订购页已超时，但卡片里没有演出链接，无法自动重开");
             return false;
         }
 
         setBotState(BOT_STATE.RESTARTING, reason);
         clearTimeout(refreshTimer);
-        updateStatus(`${reason}; returning to NOL product page and restarting.`);
+        updateStatus(`${reason}，回到演出页重新开始`);
         location.href = targetUrl;
         return true;
     }
@@ -1178,7 +1176,7 @@
 
         const elapsedMinutes = (elapsedMs / 60000).toFixed(1);
         const timeoutMinutes = (timeoutMs / 60000).toFixed(1);
-        return restartBookingFromProductPage(`Booking page ran ${elapsedMinutes}/${timeoutMinutes} minutes`);
+        return restartBookingFromProductPage(`订购页已运行 ${elapsedMinutes}/${timeoutMinutes} 分钟`);
     }
 
     function coerceBoolean(value, fallback) {
@@ -1254,13 +1252,13 @@
             }, response => {
                 target.removeAttribute(attribute);
                 if (chrome.runtime.lastError) {
-                    updateStatus(`Main-world ${mode} failed: ${chrome.runtime.lastError.message}`);
+                    updateStatus(`页面操作 ${mode} 失败：${chrome.runtime.lastError.message}`);
                     resolve(false);
                     return;
                 }
 
                 if (!response || !response.success) {
-                    updateStatus(`Main-world ${mode} failed: ${response && (response.error || response.reason) || "unknown"}`);
+                    updateStatus(`页面操作 ${mode} 失败：${response && (response.error || response.reason) || "未知原因"}`);
                     resolve(false);
                     return;
                 }
@@ -1306,18 +1304,18 @@
                 seats: selectedSeats,
             }, response => {
                 if (chrome.runtime.lastError) {
-                    updateStatus(`Apply locked seats failed: ${chrome.runtime.lastError.message}`);
+                    updateStatus(`把已锁座位同步到页面失败：${chrome.runtime.lastError.message}`);
                     resolve(false);
                     return;
                 }
 
                 if (!response || !response.success) {
-                    updateStatus(`Apply locked seats failed: ${response && (response.error || response.reason) || "unknown"}`);
+                    updateStatus(`把已锁座位同步到页面失败：${response && (response.error || response.reason) || "未知原因"}`);
                     resolve(false);
                     return;
                 }
 
-                updateStatus(`Applied ${response.added || selectedSeats.length} locked seat(s) to page.`);
+                updateStatus(`已把 ${response.added || selectedSeats.length} 个锁定座位同步到页面`);
                 resolve(true);
             });
         });
@@ -1335,18 +1333,18 @@
                 targetBlockLeft,
             }, response => {
                 if (chrome.runtime.lastError) {
-                    updateStatus(`Main-world slider captcha failed: ${chrome.runtime.lastError.message}`);
+                    updateStatus(`拖动滑块失败：${chrome.runtime.lastError.message}`);
                     resolve(false);
                     return;
                 }
 
                 if (!response || !response.success) {
-                    updateStatus(`Main-world slider captcha failed: ${response && (response.error || response.reason) || "unknown"}`);
+                    updateStatus(`拖动滑块失败：${response && (response.error || response.reason) || "未知原因"}`);
                     resolve(false);
                     return;
                 }
 
-                updateStatus(`Slider captcha dragged: block left ${response.finalBlockLeft}px / target ${response.targetBlockLeft}px.`);
+                updateStatus(`已拖动滑块：${response.finalBlockLeft}px / 目标 ${response.targetBlockLeft}px`);
                 resolve(true);
             });
         });
@@ -1719,7 +1717,7 @@
             return "";
         }
 
-        return `; row filter <= ${maxRow}: ${filtered.length}/${candidates.length}`;
+        return `（前 ${maxRow} 排：${filtered.length}/${candidates.length}）`;
     }
 
     function findAvailableSeatCandidatesFromDocument(documentLike) {
@@ -1825,7 +1823,7 @@
 
         const playSeq = params.get("PlaySeq") || getCurrentPlaySeq();
         if (!playSeq) {
-            updateStatus("Seat lock payload missing PlaySeq; stop before lock request.");
+            updateStatus("锁座参数缺少场次 PlaySeq，不发送锁座请求");
             return null;
         }
 
@@ -1885,20 +1883,20 @@
 
     async function submitSeatLock(candidates) {
         if (isCaptchaVisible()) {
-            updateStatus("Captcha is still visible; skip seat lock API.");
+            updateStatus("验证码未完成，暂不锁座");
             return null;
         }
 
         const payload = buildSeatLockPayload(candidates);
         if (!payload) {
-            updateStatus("Seat lock payload could not be built.");
+            updateStatus("锁座参数构建失败");
             notifySeatLockFailed("锁座参数构建失败", candidates);
             return null;
         }
 
         await delay(700);
         if (isCaptchaVisible()) {
-            updateStatus("Captcha appeared before seat lock API; skip lock request.");
+            updateStatus("锁座前出现验证码，本次不锁座");
             return null;
         }
 
@@ -1914,8 +1912,8 @@
             const text = await response.text();
             const success = response.ok && isSeatLockSuccess(text);
             updateStatus(success
-                ? `Seat lock API succeeded for ${payload.selected.length} seat(s).`
-                : `Seat lock API failed with status ${response.status}.`);
+                ? `锁座接口成功：${payload.selected.length} 个座位`
+                : `锁座接口失败：HTTP ${response.status}`);
             if (success) {
                 const firstSeat = payload.selected[0];
                 lockedSeatContext = {
@@ -1923,7 +1921,7 @@
                     firstSeat,
                     lockedAt: Date.now(),
                 };
-                updateStatus(`Seat lock API returned success for ${firstSeat.block || "-"} ${firstSeat.seatNo || ""}; waiting for page selection.`);
+                updateStatus(`锁座成功：${formatSeatBrief(firstSeat) || "-"}，等待页面选中`);
             } else {
                 const responseMessage = normalizeText(text.replace(/<[^>]*>/g, " ")).slice(0, 160);
                 const reason = responseMessage
@@ -1933,7 +1931,7 @@
             }
             return success ? payload.selected : null;
         } catch (error) {
-            updateStatus(`Seat lock API failed: ${error.message}`);
+            updateStatus(`锁座请求失败：${error.message}`);
             notifySeatLockFailed(error && error.message || "请求异常", payload.selected);
             return null;
         }
@@ -2143,14 +2141,14 @@
         });
 
         if (!target) {
-            updateStatus("Booking next button was not found.");
+            updateStatus("没有找到订购页的下一步按钮");
             return false;
         }
 
         if (!await clickVisibleElement(target)) {
             return false;
         }
-        updateStatus("Clicked booking next button.");
+        updateStatus("已点击下一步");
         return true;
     }
 
@@ -2308,7 +2306,7 @@
 
         const dateTimeStep = await waitForDateTimeStep();
         if (!dateTimeStep) {
-            updateStatus("Waiting for Date/Time step...");
+            updateStatus("等待日期/场次页面");
             return false;
         }
 
@@ -2317,25 +2315,25 @@
         if (selected) {
             await clickElement(selected.element);
             await delay(500);
-            updateStatus(`Selected date/time ${selected.playDate} ${selected.playTime || selected.playSeq}.`);
+            updateStatus(`已选择 ${selected.playDate} ${selected.playTime || selected.playSeq}`);
         } else {
             const dateOption = choosePlayDateOption(collectPlayDateOptions(dateTimeStep.document));
             if (!dateOption) {
-                updateStatus("No Date option found for configured date.");
+                updateStatus("页面上没有卡片配置的日期");
                 return false;
             }
 
             await clickElement(dateOption.element);
-            updateStatus(`Selected date ${dateOption.playDate}.`);
+            updateStatus(`已选择日期 ${dateOption.playDate}`);
 
             const seqOption = await waitForPlaySeqOption(dateTimeStep.document);
             if (!seqOption) {
-                updateStatus("No PlaySeq option found for configured time.");
+                updateStatus("页面上没有卡片配置的场次时间");
                 return false;
             }
 
             await clickElement(seqOption.element);
-            updateStatus(`Selected time ${seqOption.playTime || seqOption.playSeq}.`);
+            updateStatus(`已选择场次 ${seqOption.playTime || seqOption.playSeq}`);
         }
         await delay(500);
 
@@ -2382,7 +2380,7 @@
     async function fillDeliveryConfirmationAndNext() {
         const deliveryStep = await waitForDeliveryStep();
         if (!deliveryStep) {
-            updateStatus("Delivery/Confirmation step was not reached.");
+            updateStatus("没有进入取票/确认页");
             return false;
         }
 
@@ -2395,18 +2393,18 @@
         selectOption(deliveryDocument, "#SNSChannel", deliveryConfig.snsChannel || "SN004", "wechat");
         setFieldValue(deliveryDocument, "#SNSID", deliveryConfig.snsId || "");
 
-        updateStatus("Delivery/Confirmation form filled.");
+        updateStatus("已填写取票/确认信息");
         await delay(500);
 
         if (!deliveryDocument.getElementById("PhoneNo").value.trim()) {
-            updateStatus("Delivery/Confirmation phoneNo is missing in config.");
+            updateStatus("卡片缺少联系电话，跳过自动下一步");
             return false;
         }
 
         const snsChannel = deliveryDocument.getElementById("SNSChannel");
         const snsId = deliveryDocument.getElementById("SNSID");
         if (snsChannel && snsChannel.value && snsId && !snsId.value.trim()) {
-            updateStatus("Delivery/Confirmation snsId is missing in config.");
+            updateStatus("卡片缺少 Messenger ID，跳过自动下一步");
             return false;
         }
 
@@ -2420,7 +2418,7 @@
     async function selectTicketCountAndNext() {
         const priceStep = await waitForPriceStep();
         if (!priceStep) {
-            updateStatus("Seat lock did not reach Price/Discount step.");
+            updateStatus("锁座后没有进入票价页");
             return false;
         }
 
@@ -2432,14 +2430,14 @@
         const selectedCount = Math.min(desiredCount, maxOption);
 
         if (selectedCount < 1) {
-            updateStatus("Price/Discount step has no positive ticket count option.");
+            updateStatus("票价页没有可选的票数");
             return false;
         }
 
         priceStep.select.value = String(selectedCount);
         priceStep.select.dispatchEvent(new Event("input", { bubbles: true }));
         priceStep.select.dispatchEvent(new Event("change", { bubbles: true }));
-        updateStatus(`Price/Discount ticket count set to ${selectedCount}.`);
+        updateStatus(`票价页已选择 ${selectedCount} 张`);
         await delay(600);
 
         if (await clickBookingNextButton()) {
@@ -2459,12 +2457,12 @@
         for (const candidate of candidates.slice(0, desiredCount)) {
             const liveSeat = findLiveSeatElementForCandidate(candidate);
             if (!liveSeat) {
-                updateStatus(`Seat ${candidate.seatNo} in area ${entry.code} was not found on the live seat map.`);
+                updateStatus(`区域 ${entry.code} 的座位 ${candidate.seatNo} 不在当前座位图上`);
                 return false;
             }
 
             if (!await selectSeatInPageWorld(liveSeat)) {
-                updateStatus(`Seat ${candidate.seatNo} in area ${entry.code} could not be selected in the page world.`);
+                updateStatus(`区域 ${entry.code} 的座位 ${candidate.seatNo} 无法在页面上选中`);
                 return false;
             }
             clickedSeats.push(candidate);
@@ -2472,14 +2470,14 @@
         }
 
         if (!await waitForSelectedSeatCount(desiredCount)) {
-            updateStatus(`Clicked seat(s) ${clickedSeats.map(seat => seat.seatNo).join(", ")}, but selected seat count did not update.`);
+            updateStatus(`已点击座位 ${clickedSeats.map(seat => seat.seatNo).join(", ")}，但页面已选数量没有变化`);
             return false;
         }
 
         const completeButton = findSeatCompleteButton();
         if (completeButton) {
             await clickElement(completeButton);
-            updateStatus(`Selected seat(s) ${clickedSeats.map(seat => seat.seatNo).join(", ")} in area ${entry.code}; clicked seat completion.`);
+            updateStatus(`已在区域 ${entry.code} 选中座位 ${clickedSeats.map(seat => seat.seatNo).join(", ")}，已点击选座完成`);
             lockedSeatContext = {
                 selected: clickedSeats,
                 firstSeat: clickedSeats[0],
@@ -2488,7 +2486,7 @@
             return selectTicketCountAndNext();
         }
 
-        updateStatus(`Selected seat(s) in area ${entry.code}; seat completion button not found.`);
+        updateStatus(`已在区域 ${entry.code} 选中座位，但没有找到选座完成按钮`);
         lockedSeatContext = {
             selected: clickedSeats,
             firstSeat: clickedSeats[0],
@@ -2506,7 +2504,7 @@
             }
 
             if (isCaptchaVisible()) {
-                updateStatus("Captcha is still visible; skip area detail API scan.");
+                updateStatus("验证码未完成，暂停区域查询");
                 return null;
             }
 
@@ -2519,13 +2517,13 @@
 
             const detail = await fetchAreaDetail(code);
             if (detail.error) {
-                updateStatus(`Area ${code} detail fetch failed: ${detail.error}`);
+                updateStatus(`区域 ${code} 查询失败：${detail.error}`);
                 await delayBeforeNextArea(index, targetCodes.length);
                 continue;
             }
 
             if (detail.ok && detail.captchaOpenDetected) {
-                updateStatus(`Area ${code} detail API returned CaptchaOpen; trying manual area open.`);
+                updateStatus(`区域 ${code} 查询要求验证码，尝试打开区域触发验证`);
                 await tryOpenAreaForCaptchaCheck(entry);
                 if (isSliderCaptchaPopupVisible()) {
                     const options = getCaptchaOcrOptions();
@@ -2537,7 +2535,7 @@
                     }
 
                     if (attempts < options.maxAttempts && await solveSliderCaptchaWithLocalOcr(code)) {
-                        updateStatus(`Area ${code}: slider captcha solved; retry detail API.`);
+                        updateStatus(`区域 ${code}：滑块已通过，重新查询`);
                         await delay(Math.max(options.submitCheckDelayMs, 2000));
                         index -= 1;
                         continue;
@@ -2545,9 +2543,9 @@
 
                     try {
                         const saved = await captureAndSaveSliderCaptchaSnapshot(code);
-                        updateStatus(`captchSlider snapshot saved: ${saved.filename}`);
+                        updateStatus(`已保存滑块截图：${saved.filename}`);
                     } catch (error) {
-                        updateStatus(`captchSlider snapshot save failed: ${error && error.message || error}`);
+                        updateStatus(`保存滑块截图失败：${error && error.message || error}`);
                     }
                     const sliderReason = captchaOcrState.lastSliderError
                         ? `滑块自动处理失败：${captchaOcrState.lastSliderError}`
@@ -2562,19 +2560,19 @@
                     };
                 }
 
-                updateStatus(`Area ${code}: CaptchaOpen returned but captchSlider did not appear; continue API polling.`);
+                updateStatus(`区域 ${code} 要求验证码但页面没有出现滑块，继续查询`);
                 await delayBeforeNextArea(index, targetCodes.length);
                 continue;
             }
 
             const candidates = filterSeatCandidatesByConfiguredRows(detail.candidates);
             if (!candidates.length) {
-                updateStatus(`Area ${code}: 0 selectable seats${describeSeatRowFilter(detail.candidates, candidates)}.`);
+                updateStatus(`区域 ${code}：没有可选座位${describeSeatRowFilter(detail.candidates, candidates)}`);
                 await delayBeforeNextArea(index, targetCodes.length);
                 continue;
             }
 
-            updateStatus(`Area ${code}: found ${candidates.length} selectable seat(s)${describeSeatRowFilter(detail.candidates, candidates)}.`);
+            updateStatus(`区域 ${code}：${candidates.length} 个可选座位${describeSeatRowFilter(detail.candidates, candidates)}`);
             const desiredCandidates = candidates.slice(0, Math.min(getDesiredTicketCount(), candidates.length));
             const locked = await submitSeatLock(desiredCandidates);
             if (!locked) {
@@ -2582,7 +2580,7 @@
                 continue;
             }
 
-            updateStatus(`Area ${code}: API locked seat(s) ${locked.map(seat => seat.seatNo).join(", ")}; applying to page.`);
+            updateStatus(`区域 ${code}：已锁定座位 ${locked.map(seat => seat.seatNo).join(", ")}，同步到页面`);
             const applied = await applyLockedSeatsInPageWorld(locked);
             const selected = applied ? await selectTicketCountAndNext() : await selectSeatCandidates(entry, locked);
 
@@ -2602,7 +2600,7 @@
             .map(normalizeAreaCode)
             .filter(Boolean);
         if (preferredCodes.length) {
-            updateStatus(`Using configured area(s): ${preferredCodes.join(", ")}`);
+            updateStatus(`按卡片区域查询：${preferredCodes.join(", ")}`);
             return preferredCodes;
         }
 
@@ -2617,11 +2615,11 @@
         }
 
         if (!await clickElement(entry.element)) {
-            updateStatus(`Area ${entry.code} click failed; trying frame load fallback.`);
+            updateStatus(`区域 ${entry.code} 点击失败，改用直接加载`);
             return false;
         }
         await delay(800);
-        updateStatus(`Clicked area ${entry.code} (${entry.count || 0} 座).`);
+        updateStatus(`已打开区域 ${entry.code}（${entry.count || 0} 座）`);
         return true;
     }
 
@@ -2660,7 +2658,7 @@
 
     async function scanAreas(summary) {
         if (isCaptchaVisible()) {
-            updateStatus("Captcha is still visible; skip area scan.");
+            updateStatus("验证码未完成，暂停扫描区域");
             return {
                 clicked: [],
                 availableAreas: [],
@@ -2671,7 +2669,7 @@
 
         await expandAvailableGrades(summary);
         if (isCaptchaVisible()) {
-            updateStatus("Captcha appeared while expanding grades; skip area scan.");
+            updateStatus("展开票档时出现验证码，暂停扫描区域");
             return {
                 clicked: [],
                 availableAreas: [],
@@ -2683,7 +2681,7 @@
         const entries = collectAreaEntries();
         const targetCodes = getTargetAreaCodes(entries);
         if (!targetCodes.length) {
-            updateStatus("No area entries found after expanding grades.");
+            updateStatus("展开票档后没有找到区域");
             return {
                 clicked: [],
                 availableAreas: [],
@@ -2729,12 +2727,12 @@
 
             if (await loadAreaInFrame(entry)) {
                 clicked.push(entry);
-                updateStatus(`Opened area ${code} from ${entry.source}.`);
+                updateStatus(`已打开区域 ${code}`);
                 await delay(700);
                 const rawLiveCandidates = findLiveSeatCandidates();
                 const liveCandidates = filterSeatCandidatesByConfiguredRows(rawLiveCandidates);
                 if (liveCandidates.length) {
-                    updateStatus(`Area ${code}: found ${liveCandidates.length} live selectable seat(s)${describeSeatRowFilter(rawLiveCandidates, liveCandidates)}.`);
+                    updateStatus(`区域 ${code}：页面上 ${liveCandidates.length} 个可选座位${describeSeatRowFilter(rawLiveCandidates, liveCandidates)}`);
                     const selected = await selectSeatCandidates(entry, liveCandidates.slice(0, getDesiredTicketCount()));
                     if (selected) {
                         return {
@@ -2747,11 +2745,11 @@
                     }
                     await delayBeforeNextArea(index, targetCodes.length);
                 } else {
-                    updateStatus(`Area ${code}: no live selectable seats on page${describeSeatRowFilter(rawLiveCandidates, liveCandidates)}.`);
+                    updateStatus(`区域 ${code}：页面上没有可选座位${describeSeatRowFilter(rawLiveCandidates, liveCandidates)}`);
                     await delayBeforeNextArea(index, targetCodes.length);
                 }
             } else {
-                updateStatus(`Area ${code} could not be opened from current page.`);
+                updateStatus(`当前页面无法打开区域 ${code}`);
                 await delayBeforeNextArea(index, targetCodes.length);
             }
         }
@@ -2771,47 +2769,20 @@
 
     function formatSummary(summary) {
         if (!summary.length) {
-            return "No seat summary found";
+            return "没有读取到余票信息";
         }
 
         return summary.map(item => `${item.grade}: ${item.count} 座`).join(" | ");
     }
 
-    function ensureStatusPanel() {
-        let panel = document.getElementById("ticket-bot-interpark-status");
-        if (panel) {
-            return panel;
-        }
-
-        panel = document.createElement("div");
-        panel.id = "ticket-bot-interpark-status";
-        panel.style.cssText = [
-            "position:fixed",
-            "right:12px",
-            "bottom:12px",
-            "z-index:2147483647",
-            "max-width:320px",
-            "padding:10px 12px",
-            "background:#111827",
-            "color:#fff",
-            "font:12px/1.45 Arial,sans-serif",
-            "border-radius:6px",
-            "box-shadow:0 8px 24px rgba(0,0,0,.25)",
-        ].join(";");
-        document.documentElement.appendChild(panel);
-        return panel;
-    }
-
     function updateStatus(message) {
-        const panel = ensureStatusPanel();
-        panel.textContent = `[Interpark] ${message}`;
-        console.log(`[Interpark] ${message}`);
+        bot.ctx.status(message);
     }
 
     async function refreshSeatList() {
         const seatWindow = getSeatWindow();
         if (!seatWindow) {
-            updateStatus("Waiting for seat frame...");
+            updateStatus("等待座位图加载");
             return {
                 summary: [],
                 areaResult: {
@@ -2834,7 +2805,8 @@
                     },
                 };
             }
-            updateStatus("Waiting for manual captcha input...");
+            bot.ctx.needHuman("验证码需要手动输入");
+            updateStatus("请手动输入验证码");
             return {
                 summary: parseAvailableSeats(),
                 areaResult: {
@@ -2846,8 +2818,8 @@
         }
 
         updateStatus(USE_SEAT_DETAIL_API_FLOW
-            ? "Checking configured area detail API for seats and lock."
-            : "Checking configured area on the live seat map without API lock.");
+            ? "通过接口查询卡片区域并锁座"
+            : "在座位图上查询卡片区域（不调用锁座接口）");
         setBotState(BOT_STATE.SCANNING);
         await delay(300);
         const summary = parseAvailableSeats();
@@ -2856,7 +2828,7 @@
         if (summaryText !== lastSummaryText) {
             lastSummaryText = summaryText;
             const clickedText = areaResult.clicked.map(entry => entry.code).join(", ");
-            updateStatus(`Checked: ${summaryText}${clickedText ? ` | areas: ${clickedText}` : ""}`);
+            updateStatus(`本轮：${summaryText}${clickedText ? `，区域 ${clickedText}` : ""}`);
         }
         return {
             summary,
@@ -2871,8 +2843,8 @@
             }
 
             if (!isMatchingBooking(activeConfig)) {
-                updateStatus("Current product does not match this card. Stopped.");
-                stopBot();
+                updateStatus("当前演出与卡片不一致");
+                await bot.ctx.stop("当前演出与卡片不一致");
                 return;
             }
 
@@ -2894,9 +2866,7 @@
             if (result.areaResult && result.areaResult.selected) {
                 setBotState(BOT_STATE.SELECTED);
                 const selectedArea = result.areaResult.clicked[0] && result.areaResult.clicked[0].code;
-                notifySelectedSeats(`Interpark 已选中区域 ${selectedArea || "-"} 的座位，进入下一步`, lockedSeatContext && lockedSeatContext.selected);
-                await markRunStateStopped();
-                botRunning = false;
+                await finishWithSuccess(`已选中区域 ${selectedArea || "-"} 的座位并进入下一步，请完成后续步骤`, lockedSeatContext && lockedSeatContext.selected);
                 return;
             }
 
@@ -2907,20 +2877,16 @@
             if (result.areaResult && result.areaResult.locked) {
                 setBotState(BOT_STATE.LOCKED);
                 const firstSeat = lockedSeatContext && lockedSeatContext.firstSeat;
-                updateStatus(`Seat locked${firstSeat ? ` (${firstSeat.block || ""} ${firstSeat.seatNo || ""})` : ""}; stopped refresh/lock loop.`);
-                if (firstSeat) {
-                    notifySelectedSeats("Interpark 锁座成功", lockedSeatContext && lockedSeatContext.selected || [firstSeat]);
-                }
-                await markRunStateStopped();
-                botRunning = false;
+                updateStatus(`锁座成功${firstSeat ? `：${formatSeatBrief(firstSeat)}` : ""}`);
+                await finishWithSuccess("锁座成功，请尽快完成后续步骤", lockedSeatContext && lockedSeatContext.selected || (firstSeat ? [firstSeat] : []));
                 return;
             }
 
             if (available > 0) {
                 const areaText = availableAreas.length
-                    ? ` | areas: ${availableAreas.map(entry => `${entry.code}=${entry.count}`).join(", ")}`
+                    ? `，区域 ${availableAreas.map(entry => `${entry.code}=${entry.count}`).join(", ")}`
                     : "";
-                updateStatus(`Found ${available} available seat(s): ${formatSummary(summary)}${areaText}`);
+                updateStatus(`发现 ${available} 个可选座位：${formatSummary(summary)}${areaText}`);
             }
 
             await delay(getRefreshDelayMs());
@@ -2943,14 +2909,15 @@
         const target = candidates.length === 1 ? candidates[0] : null;
         if (target) {
             if (await clickVisibleElement(target)) {
-                updateStatus("Clicked NOL buy button.");
+                updateStatus("已点击购买");
                 return true;
             }
-            updateStatus("NOL buy button click failed; waiting before retry.");
+            updateStatus("点击购买失败，稍后重试");
             return false;
         }
 
-        updateStatus("Buy button not found. Open the product page and click manually.");
+        bot.ctx.needHuman("没有找到购买按钮，请手动点击");
+        updateStatus("没有找到购买按钮，请手动点击");
         return false;
     }
 
@@ -2968,7 +2935,7 @@
             await delay(1000);
         }
 
-        updateStatus("Buy button was not found after waiting.");
+        updateStatus("等待后仍没有找到购买按钮");
         return false;
     }
 
@@ -3043,7 +3010,7 @@
             const arrow = targetDate && month && targetDate.slice(0, 6) !== month
                 ? document.getElementById(targetDate.slice(0, 6) > month ? "swiperButtonNext" : "swiperButtonPrev") : null;
             if (clickOnestopElement(arrow)) return;
-            updateStatus(`等待可用日期 ${targetDate || "（页面加载中）"}，不会改选其他日期。`);
+            updateStatus(`等待可用日期 ${targetDate || "（页面加载中）"}，不会改选其他日期`);
             return;
         }
         if (selected.element.getAttribute("aria-pressed") !== "true") {
@@ -3056,7 +3023,7 @@
         const time = targetTime ? times.find(element => parseOnestopTime(element.textContent) === targetTime)
             : times.find(element => element.getAttribute("aria-selected") === "true") || times[0];
         if (!time) {
-            updateStatus(`日期 ${selected.date}：等待场次 ${targetTime || "加载"}，不会改选其他时间。`);
+            updateStatus(`日期 ${selected.date}：等待场次 ${targetTime || "加载"}，不会改选其他时间`);
             return;
         }
         if (time.getAttribute("aria-selected") !== "true") {
@@ -3064,7 +3031,7 @@
             return;
         }
         if (clickOnestopElement(findOnestopButton('[class*="ScheduleContent_footerButton"] button[class*="EntButton_primary"]'))) {
-            updateStatus(`已选择 ${selected.date} ${parseOnestopTime(time.textContent)}，等待进入选座。`);
+            updateStatus(`已选择 ${selected.date} ${parseOnestopTime(time.textContent)}，等待进入选座`);
             await delay(1000);
         }
     }
@@ -3076,7 +3043,7 @@
                 if (generation !== onestopRunGeneration) return;
                 const step = location.pathname.replace(/\/$/, "").split("/").pop();
                 if (step === "onestop") {
-                    updateStatus("等待新版订购入口完成初始化。");
+                    updateStatus("等待新版订购入口完成初始化");
                 } else if (step === "schedule") {
                     setBotState(BOT_STATE.DATE_TIME);
                     await selectOnestopSchedule();
@@ -3085,13 +3052,13 @@
                     if (detailStep === "price") {
                         await advanceOnestopPrice();
                     } else if (detailStep) {
-                        await pauseBotWithNotification("已进入后续订购步骤，请确认页面信息。");
+                        await pauseBotWithNotification("已进入后续订购步骤，请确认页面信息");
                         return;
                     } else {
                         await runOnestopSeatTick();
                     }
                 } else {
-                    await pauseBotWithNotification("已进入后续订购页面，请确认联系人及付款信息。");
+                    await pauseBotWithNotification("已进入后续订购页面，请确认联系人及付款信息");
                     return;
                 }
                 await delay(Math.max(500, getRefreshDelayMs()));
@@ -3141,15 +3108,17 @@
     }
 
     async function handleOnestopQueryFailure(result, batch) {
+        // 上报给卡点规则 / 运行记录；没有规则的返回会记成 unhandled，供 Agent 复盘
+        bot.ctx.observe("api", `HTTP ${result.status || "?"} ${result.error || ""}`);
         if (result.status === 403 && batch?.length) {
             onestopRecovery = { area: batch[0], phase: "probe", startedAt: Date.now(), error: result.error };
-            updateStatus("区域接口受阻，进入单次验证码检查。");
+            updateStatus("区域接口受阻，进入单次验证码检查");
         } else if (result.status === 401) {
-            await pauseBotWithNotification("订购会话失效，请重新登录后启动。");
+            await pauseBotWithNotification("订购会话失效，请重新登录后启动");
         } else {
             const retryMs = result.status === 429 ? Math.max(30000, result.retryAfterMs || 0) : Math.max(500, getRefreshDelayMs());
             onestopRetryAt = Date.now() + retryMs;
-            updateStatus(`后台请求失败：${result.error}；${Math.ceil(retryMs / 1000)} 秒后重试。`);
+            updateStatus(`后台请求失败：${result.error}；${Math.ceil(retryMs / 1000)} 秒后重试`);
         }
     }
 
@@ -3188,12 +3157,12 @@
             let available = 0;
             for (const area of batch) {
                 const inventory = byKey.get(area.blockKey);
-                if (!inventory) { await pauseBotWithNotification("批次响应缺少目标区域，已停止选座。"); return; }
+                if (!inventory) { await pauseBotWithNotification("批次响应缺少目标区域，已停止选座"); return; }
                 available += inventory.seats.length;
                 const candidates = chooseOnestopSeats(inventory.seats, getDesiredTicketCount(), getMaxSeatRow());
                 if (candidates.length) { await selectOnestopSeats(context, area, candidates); return; }
             }
-            updateStatus(`后台批次 ${index + 1}/${batches.length}：${batch.map(area => area.code).join(", ")}；${available} 个可用座位。`);
+            updateStatus(`后台批次 ${index + 1}/${batches.length}：${batch.map(area => area.code).join(", ")}；${available} 个可用座位`);
             if (index + 1 < batches.length) await delay(Math.max(200, getAreaScanIntervalMs()));
         }
     }
@@ -3255,7 +3224,7 @@
         if (!botRunning || generation !== onestopRunGeneration) return;
         const complete = findOnestopButton('[class*="InfoSelected_footer"] button[class*="EntButton_primary"]');
         if (!clickOnestopElement(complete)) {
-            await pauseBotWithNotification(`区域 ${area.code} 已预选 ${seats.length} 席，请手动点击完成选择。`);
+            await pauseBotWithNotification(`区域 ${area.code} 已预选 ${seats.length} 席，请手动点击完成选择`);
             return;
         }
         const started = Date.now();
@@ -3267,19 +3236,19 @@
             }
             await delay(200);
         }
-        if (botRunning && generation === onestopRunGeneration) await pauseBotWithNotification("已提交完成选择，未确认进入票价步骤；请检查页面提示。");
+        if (botRunning && generation === onestopRunGeneration) await pauseBotWithNotification("已提交完成选择，未确认进入票价步骤；请检查页面提示");
     }
 
     async function advanceOnestopPrice() {
         const generation = onestopRunGeneration;
         if (onestopPriceSubmittedAt) {
             if (Date.now() - onestopPriceSubmittedAt > 10000) {
-                await pauseBotWithNotification("票价已提交但页面未跳转，请检查提示；不会重复提交。");
+                await pauseBotWithNotification("票价已提交但页面未跳转，请检查提示；不会重复提交");
             }
             return;
         }
         const groups = Array.from(document.querySelectorAll('[class*="PriceGroup_group"]')).filter(isElementVisible);
-        if (!groups.length) { updateStatus("等待票价信息加载。"); return; }
+        if (!groups.length) { updateStatus("等待票价信息加载"); return; }
         const snapshot = await requestOnestop("snapshot");
         if (!botRunning || generation !== onestopRunGeneration) return;
         if (!snapshot.success) { updateStatus(`等待锁座信息：${snapshot.error}`); return; }
@@ -3292,11 +3261,11 @@
         const required = plans.reduce((sum, plan) => sum + plan.required, 0);
         if (plans.some(plan => !Number.isInteger(plan.required) || plan.required < 1)
             || required !== snapshot.result.selected.length || required !== getDesiredTicketCount()) {
-            await pauseBotWithNotification("票价数量与已锁座位或卡片数量不一致，已停止。"); return;
+            await pauseBotWithNotification("票价数量与已锁座位或卡片数量不一致，已停止"); return;
         }
         // Do not guess eligibility or discounts when multiple price types are offered.
         if (plans.some(plan => plan.inputs.length !== 1)) {
-            await pauseBotWithNotification("存在多个票价选项，请选择适用票价后继续；不会自动猜测优惠资格。"); return;
+            await pauseBotWithNotification("存在多个票价选项，请选择适用票价后继续；不会自动猜测优惠资格"); return;
         }
         for (const plan of plans) {
             const input = plan.inputs[0];
@@ -3304,18 +3273,18 @@
             // The live stepper changes aria-valuemax to the remaining allowance (0 after 1/1).
             // The price group's locked quantity, not aria-valuemax, is the target total.
             if (!Number.isInteger(current) || current < 0 || current > plan.required) {
-                await pauseBotWithNotification("票价计数异常，已停止。"); return;
+                await pauseBotWithNotification("票价计数异常，已停止"); return;
             }
             if (current < plan.required) {
                 const plus = input.closest('.nds-e-stepper__root')?.querySelector('.nds-e-stepper__incrementButton');
-                if (clickOnestopElement(plus)) updateStatus(`选择票价数量 ${current + 1}/${plan.required}。`);
+                if (clickOnestopElement(plus)) updateStatus(`选择票价数量 ${current + 1}/${plan.required}`);
                 return; // Observe the committed React count on the next tick; never double-increment.
             }
         }
         const next = findOnestopButton('[class*="PriceContent_footer"] button[class*="EntButton_primary"]');
         if (clickOnestopElement(next)) {
             onestopPriceSubmittedAt = Date.now();
-            updateStatus(`已选择 ${required} 张票价，进入后续订购信息页。`);
+            updateStatus(`已选择 ${required} 张票价，进入后续订购信息页`);
         }
     }
 
@@ -3336,7 +3305,8 @@
             if (!image || !rect?.width || !viewBox?.width
                 || ![area.left, area.right, area.top, area.bottom].every(value => Number.isFinite(Number(value)))) {
                 recovery.phase = "manual";
-                updateStatus("接口受阻，请手动点击一次目标区域，检查是否出现拼图验证码；检查后将恢复总览。");
+                bot.ctx.needHuman("接口受阻，请手动点击一次目标区域，检查是否出现拼图验证码");
+                updateStatus("接口受阻，请手动点击一次目标区域，检查是否出现拼图验证码；检查后将恢复总览");
                 return;
             }
             image.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window,
@@ -3352,7 +3322,8 @@
             setBotState(BOT_STATE.CAPTCHA);
             recovery.attempts = recovery.attempts || 0;
             if (recovery.attempts >= getCaptchaOcrOptions().maxAttempts) {
-                updateStatus("拼图验证码自动识别未通过，请手动完成；完成后将恢复总览。");
+                bot.ctx.needHuman("拼图验证码自动识别未通过，请手动完成");
+                updateStatus("拼图验证码自动识别未通过，请手动完成；完成后将恢复总览");
                 return;
             }
             recovery.attempts += 1;
@@ -3366,7 +3337,8 @@
         if (!fit || fit.disabled) {
             if (Date.now() - recovery.startedAt >= 10000) {
                 recovery.phase = "manual";
-                updateStatus("单次区域点击未确认生效，请手动点击目标区域；不会连续点击地图。");
+                bot.ctx.needHuman("区域点击未生效，请手动点击目标区域");
+                updateStatus("单次区域点击未确认生效，请手动点击目标区域；不会连续点击地图");
             }
             return;
         }
@@ -3374,7 +3346,7 @@
             if (!clickOnestopElement(fit)) return;
             // Map animation is cosmetic: resume API polling in this scan, without waiting for it.
             onestopRecovery = null;
-            updateStatus("已点击右下角恢复总览，后台接口轮询继续；不等待地图动画。");
+            updateStatus("已点击右下角恢复总览，后台接口轮询继续；不等待地图动画");
         }
     }
 
@@ -3389,7 +3361,7 @@
     async function waitForOnestopGate(generation) {
         while (botRunning && generation === onestopRunGeneration && isInterparkGatePage()) {
             if (!await syncRunStateConfig()) return;
-            updateStatus("等待网站确认订购信息并进入新版场次页。");
+            updateStatus("等待网站确认订购信息并进入新版场次页");
             await delay(500);
         }
         if (botRunning && generation === onestopRunGeneration && isInterparkOnestopPage()) {
@@ -3403,23 +3375,23 @@
         const waitingMatch = bodyText.match(/現在等候人數\s*([\d,.]+)/i);
         const progressMatch = bodyText.match(/訂購率\s*([\d.]+%)/i);
         const parts = [];
-        const heartbeatText = `alive #${heartbeatCount} ${new Date().toLocaleTimeString()}`;
+        const heartbeatText = `第 ${heartbeatCount} 次检查 ${new Date().toLocaleTimeString()}`;
 
         if (rankMatch) {
-            parts.push(`rank ${rankMatch[1]}`);
+            parts.push(`排名 ${rankMatch[1]}`);
         }
 
         if (waitingMatch) {
-            parts.push(`waiting ${waitingMatch[1]}`);
+            parts.push(`等待 ${waitingMatch[1]}`);
         }
 
         if (progressMatch) {
-            parts.push(`progress ${progressMatch[1]}`);
+            parts.push(`进度 ${progressMatch[1]}`);
         }
 
         return parts.length
-            ? `Queue page detected; silently waiting (${parts.join(", ")}; ${heartbeatText}).`
-            : `Queue page detected; silently waiting for automatic redirect (${heartbeatText}).`;
+            ? `排队中，等待自动跳转（${parts.join("，")}；${heartbeatText}）`
+            : `排队中，等待自动跳转（${heartbeatText}）`;
     }
 
     async function runQueueWaitLoop() {
@@ -3436,15 +3408,21 @@
         }
     }
 
-    async function startBot(botConfig) {
-        activeConfig = botConfig || activeConfig || {};
-        if (botRunning) {
-            return;
+    function haltFlow() {
+        botRunning = false;
+        onestopRunGeneration += 1;
+        clearTimeout(refreshTimer);
+        if (isInterparkOnestopPage()) {
+            requestOnestop("cancel").catch(() => {});
         }
+        botState = BOT_STATE.STOPPED;
+    }
 
+    async function runFlow(botConfig) {
+        activeConfig = botConfig || activeConfig || {};
         botRunning = true;
         setBotState(BOT_STATE.STARTING);
-        updateStatus("Started.");
+        updateStatus("已开始");
 
         if (isInterparkGatePage()) {
             onestopRunGeneration += 1;
@@ -3477,7 +3455,7 @@
         }
 
         if (!isInterparkBookPage()) {
-            updateStatus("Open the NOL product or Interpark booking page to run.");
+            updateStatus("请在 NOL 演出页或 Interpark 订购页上开始");
             return;
         }
 
@@ -3486,50 +3464,16 @@
         refreshTimer = setTimeout(runRefreshLoop, 500);
     }
 
-    async function markRunStateStopped() {
-        await store_value(getRunStateKey(), {
-            running: false,
-            platform: PLATFORM,
-            concertId: getCurrentProductId(),
-        });
+    async function startBot(botConfig) {
+        await bot.start(botConfig || activeConfig);
     }
 
     async function stopBot() {
-        botRunning = false;
-        onestopRunGeneration += 1;
-        if (isInterparkOnestopPage()) requestOnestop("cancel");
-        clearTimeout(refreshTimer);
-        await markRunStateStopped();
-        setBotState(BOT_STATE.STOPPED);
-        updateStatus("Stopped.");
+        await bot.stop("已停止");
     }
 
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        if (request.action === actions.startBot && (!request.platform || request.platform === PLATFORM)) {
-            startBot(request.config);
-            sendResponse({ status: "started" });
-            return true;
-        }
-
-        if (request.action === actions.stopBot && (!request.platform || request.platform === PLATFORM)) {
-            stopBot();
-            sendResponse({ status: "stopped" });
-            return true;
-        }
-    });
-
     async function startFromRunState() {
-        const runState = await get_stored_value(getRunStateKey());
-        if (!runState || !runState.running || runState.platform !== PLATFORM) {
-            return;
-        }
-
-        activeConfig = runState.config || {};
-        if (!isMatchingBooking(activeConfig)) {
-            return;
-        }
-
-        await startBot(activeConfig);
+        await bot.autoStart();
     }
 
     startFromRunState();

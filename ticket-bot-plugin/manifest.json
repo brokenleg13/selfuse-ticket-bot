@@ -1,14 +1,15 @@
 {
     "manifest_version": 3,
     "name": "EasyConcertKorea",
-    "description": "A simple ticket bot for Interpark, Yes24, and Melon Ticket.",
+    "description": "A ticket helper for Interpark, Yes24, and Melon Ticket.",
     "version": "1.0",
     "permissions": [
         "storage",
         "activeTab",
         "scripting",
         "declarativeNetRequest",
-        "downloads"
+        "downloads",
+        "offscreen"
     ],
     "declarative_net_request": {
         "rule_resources": [
@@ -20,7 +21,6 @@
         ]
     },
     "host_permissions": [
-        "https://booking.thaiticketmajor.com/*",
         "https://ticket.yes24.com/*",
         "https://cdn-botmanager.stclab.com/*",
         "https://world.nol.com/*",
@@ -50,9 +50,7 @@
                 "https://tkglobal.melon.com/*",
                 "https://world.nol.com/*",
                 "https://tickets.interpark.com/*",
-                "https://gpoticket.globalinterpark.com/*",
-                "https://booking.thaiticketmajor.com/*",
-                "https://www.thaiticketmajor.com/*"
+                "https://gpoticket.globalinterpark.com/*"
             ],
             "js": [
                 "scripts/common/beforeunload-blocker.js"
@@ -72,6 +70,12 @@
                 "scripts/common/hourToPm.js",
                 "scripts/common/storage.js",
                 "scripts/common/sleep.js",
+                "scripts/common/captcha-client.js",
+                "scripts/common/sound.js",
+                "scripts/common/status-panel.js",
+                "scripts/common/main-world.js",
+                "scripts/common/journal.js",
+                "scripts/common/runtime.js",
                 "scripts/yes24/seatv2.js"
             ]
         },
@@ -85,6 +89,12 @@
                 "scripts/common/feishubot.js",
                 "scripts/common/storage.js",
                 "scripts/common/sleep.js",
+                "scripts/common/captcha-client.js",
+                "scripts/common/sound.js",
+                "scripts/common/status-panel.js",
+                "scripts/common/main-world.js",
+                "scripts/common/journal.js",
+                "scripts/common/runtime.js",
                 "scripts/melonticket/seat.js"
             ],
             "run_at": "document_end"
@@ -96,26 +106,17 @@
             ],
             "js": [
                 "config/config.js",
-                "scripts/common/hourToPm.js",
-                "scripts/common/storage.js",
-                "scripts/common/sleep.js",
-                "scripts/melonticket/concert.js"
-            ],
-            "run_at": "document_end"
-        },
-        {
-            "matches": [
-                "https://www.thaiticketmajor.com/performance/*",
-                "https://booking.thaiticketmajor.com/booking/3m/zones.php*"
-            ],
-            "js": [
-                "config/config.js",
                 "scripts/common/feishubot.js",
                 "scripts/common/hourToPm.js",
                 "scripts/common/storage.js",
                 "scripts/common/sleep.js",
-                "scripts/thaiticket/concert.js",
-                "scripts/thaiticket/seatv2.js"
+                "scripts/common/captcha-client.js",
+                "scripts/common/sound.js",
+                "scripts/common/status-panel.js",
+                "scripts/common/main-world.js",
+                "scripts/common/journal.js",
+                "scripts/common/runtime.js",
+                "scripts/melonticket/concert.js"
             ],
             "run_at": "document_end"
         },
@@ -137,6 +138,12 @@
                 "scripts/common/feishubot.js",
                 "scripts/common/storage.js",
                 "scripts/common/sleep.js",
+                "scripts/common/captcha-client.js",
+                "scripts/common/sound.js",
+                "scripts/common/status-panel.js",
+                "scripts/common/main-world.js",
+                "scripts/common/journal.js",
+                "scripts/common/runtime.js",
                 "scripts/interpark/seat.js"
             ],
             "run_at": "document_end"

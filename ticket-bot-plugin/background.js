@@ -41,7 +41,97 @@ function buildRefererRule(targetUrl, refererUrl) {
     };
 }
 
+// ---------- 提示音：在 offscreen 页面播放，不受购票页自动播放限制 ----------
+const OFFSCREEN_SOUND_URL = 'offscreen/sound.html';
+let offscreenCreating = null;
+
+async function ensureOffscreenSound() {
+    if (!chrome.offscreen) {
+        throw new Error('offscreen API unavailable');
+    }
+    if (chrome.runtime.getContexts) {
+        const contexts = await chrome.runtime.getContexts({
+            contextTypes: ['OFFSCREEN_DOCUMENT'],
+            documentUrls: [chrome.runtime.getURL(OFFSCREEN_SOUND_URL)],
+        });
+        if (contexts.length) return;
+    }
+    if (!offscreenCreating) {
+        offscreenCreating = chrome.offscreen.createDocument({
+            url: OFFSCREEN_SOUND_URL,
+            reasons: ['AUDIO_PLAYBACK'],
+            justification: 'Play alert sounds when the ticket bot needs human takeover.',
+        }).catch(error => {
+            if (!/single offscreen|already/i.test(error.message || '')) throw error;
+        }).finally(() => {
+            offscreenCreating = null;
+        });
+    }
+    await offscreenCreating;
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // 在发送消息的标签页里，以页面环境（MAIN world）点击元素。替代原来的油猴点击脚本。
+    if (request.action === 'mainWorldClick') {
+        const tabId = sender.tab && sender.tab.id;
+        if (!tabId || typeof request.selector !== 'string' || !request.selector) {
+            sendResponse({ success: false, error: 'Missing tab or selector.' });
+            return false;
+        }
+        chrome.scripting.executeScript({
+            target: { tabId, frameIds: [typeof sender.frameId === 'number' ? sender.frameId : 0] },
+            world: 'MAIN',
+            args: [request.selector, Number.isInteger(request.frameIndex) ? request.frameIndex : null],
+            func: (selector, frameIndex) => {
+                let doc = document;
+                if (frameIndex !== null) {
+                    const frame = window.frames[frameIndex];
+                    try {
+                        doc = frame && frame.document;
+                    } catch (error) {
+                        return { success: false, error: `iframe ${frameIndex} 不可访问` };
+                    }
+                    if (!doc) return { success: false, error: `没有找到 iframe ${frameIndex}` };
+                }
+                const element = doc.querySelector(selector);
+                if (!element) return { success: false, error: `没有找到元素 ${selector}` };
+                element.click();
+                return { success: true };
+            },
+        })
+            .then(results => sendResponse(results && results[0] && results[0].result || { success: false, error: 'No result.' }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+        return true;
+    }
+    if (request.action === 'playSound' && !request.target) {
+        ensureOffscreenSound()
+            .then(() => chrome.runtime.sendMessage({ ...request, target: 'offscreen-sound' }))
+            .then(response => sendResponse(response || { success: false }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+        return true;
+    }
+    // 飞书推送由后台发送，避免购票页的 CORS 限制。只允许飞书/Lark 的 webhook 域名。
+    if (request.action === 'notifyFeishu') {
+        let host = '';
+        try {
+            host = new URL(request.webhookUrl).hostname;
+        } catch (error) {
+            host = '';
+        }
+        if (!/(^|\.)(feishu\.cn|larksuite\.com|larkoffice\.com)$/.test(host)) {
+            sendResponse({ success: false, error: 'Invalid Feishu webhook host.' });
+            return false;
+        }
+        fetch(request.webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(request.payload || {}),
+        })
+            .then(res => res.json())
+            .then(json => sendResponse({ success: true, result: json }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+        return true;
+    }
     if (request.action === 'interparkOnestopAction') {
         const tabId = sender.tab && sender.tab.id;
         if (!tabId || !/^https:\/\/tickets\.interpark\.com\/(?:onestop(?:[/?#]|$)|gates\/)/.test(sender.url || '')

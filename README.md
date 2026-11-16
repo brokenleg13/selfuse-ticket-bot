@@ -11,311 +11,85 @@
 - 由于自己使用并不是很频繁，基本有用到去抢票时才会临时修正，所以在提Issues时请带上截图、详细问题描述及期望修复，我会在有空时修复（不过现在AI工具很发达 建议可以自己先找AI解决:D）
 - 最后 祝大家都能顺利捡到原价票（骂过我老公名井南的除外）
 
+## Quick Start
 
-## 项目结构
+用一个 AI Agent 帮你完成部署和配置。推荐 [WorkBuddy](https://www.workbuddy.ai/) + DeepSeek V4.1 Flash，备选 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，用 Codex / Claude Code 也可以。打开 Agent 后，把下面这段话原样发给它：
 
-- `ticket-bot-plugin/`：Chrome MV3 插件源码。
-  - `manifest.json`：插件权限、content script 注册、DNR 规则注册。
-  - `background.js`：插件 Service Worker，负责座位接口需要的动态 `Referer` 请求头规则、主世界点击、截图等后台能力。
-  - `rules.json`：YES24 antibot 脚本替换用的静态 DNR 规则。
-  - `popup/`：插件弹窗页面、平台配置表单、卡片列表。
-  - `scripts/common/`：各平台共用的 content script 工具。
-  - `scripts/yes24/`、`scripts/thaiticket/`、`scripts/melonticket/`、`scripts/interpark/`：各平台自动化脚本。
-- `TampermonkeyScript/`：油猴脚本目录，目前主要保留 YES24 流程和通用弹窗屏蔽脚本；Interpark 不再依赖油猴点击 Next。
-- `local-services/`：本地辅助服务，目前包含 GLM-OCR 验证码识别服务。
-
-## 本地文件
-
-- Chrome 加载解压插件后可能生成 `ticket-bot-plugin/_metadata/`，该目录已被 git 忽略。
-- YES24 调试时保存的页面快照，例如 `ticket-bot-plugin/scripts/yes24/page.html`，属于本地调试文件，已被 git 忽略。
-- 非敏感的共享运行常量放在 `ticket-bot-plugin/config/config.js`。
-- 本地备注或临时复制的敏感信息可以放在 `ticket-bot-plugin/config/local.json`，该文件已被 git 忽略，插件也不会主动加载。
-- 飞书 Webhook、YES24 `idCustomer`、Interpark 联系人等运行时敏感信息通过插件卡片保存到 `chrome.storage.sync`，不要写死在脚本里。
-
-## 手动启动 / 停止流程
-
-- 在插件首页选择平台，新建或编辑抢票卡片。
-- YES24 的 `idCustomer` 在 YES24 专属表单里的 `YES24 用户 ID` 字段填写，不再硬编码到 `scripts/yes24/seatv2.js`。
-- Interpark 使用 NOL World 链接。`演出 ID / 链接` 可填写完整 NOL URL、`productId?placeCode=placeId`，或 `placeId/productId`；脚本不会再回退到任何测试演出 ID。
-- 打开目标票务页面后，在插件首页点击对应卡片的 `开始`。
-- 需要停止当前页面脚本时，点击同一卡片的 `停止`。
-- 点击 `编辑` 会打开已保存配置，并回填原有信息；保存时会保留旧字段，避免插件更新后空字段覆盖已填信息。
-
-## Interpark 更新说明
-
-临时加更一集InterPark 希望Once们都能捡到安可票:D
-页面为后台刷票，右下角的小框信息在更新说明刷票流程已启动
-
-本地部署小模型后可以支持自动识别验证码填写
-如果你不会部署 可以让你的CodeX/Claude code读本文档帮你做好
-
-Interpark 已切到 NOL World 页面流程，配置、启停、验证码和后续确认页信息都通过插件卡片管理。
-
-### 2026-09 新版 Onestop
-
-- 购买、下一步、完成选座、验证码提交/刷新使用组件范围内的结构选择器，验证码图片使用组件容器定位；不匹配翻译文案或翻译后的 `alt` / `aria-label`。按钮匹配不唯一时停止操作。日期、时间仍按显示值解析并与配置校验。
-- 内容脚本覆盖 `/gates/*`、无尾斜杠的 `/onestop` 入口及其查询参数和子路由，等待网站自行初始化并进入场次页；后台兼容 SPA 跳转后 Chrome 消息仍携带初始入口地址的行为。
-
-- 支持 `tickets.interpark.com/onestop/schedule` 和 `/onestop/seat`，旧版 `BookMain.asp` 分支继续保留。
-- 新版按配置范围后台批量调用 `seatStatus` / `seatMeta`，每批最多 16 个区域；区域配置为空时每轮覆盖全场，旧版点击区域数上限不再限制新版查询。区域填接口区域码，例如 `004`，也支持完整 `001:004`；地图上的 `N3` 等文字不一定是接口区域码，未匹配时不会擅自扩大范围。
-- 只有区域请求返回 403 才触发一次前台检查；普通网络错误重试，401 停止，429 按服务器要求退避。验证码使用本地 `127.0.0.1:17861` 服务。异常检查后的恢复显示与正常后台扫描分离，不等待地图恢复动画。详细状态、查询和选座规则见 [新版业务流程](docs/interpark-onestop-flow.md)。
-- 日期和时间必须匹配卡片；支持页面的 `7:45 PM` 格式。前几排过滤使用新版元数据的行索引；多张票只选择同排、同票档连续座位或完整座位组。
-- 新版预选走页面自带处理函数与 GraphQL 校验，确认进入 `step=price` 后按锁座数量自动选择票价。每组仅一种票价时自动继续，多种票价不猜测资格；到 `/onestop/payment` 后停止，联系人、条款和支付由用户确认。
-- 更新后需要在 Chrome 扩展管理页重新加载插件，再刷新购票页。运行测试：`npm ci --prefix ticket-bot-plugin`，然后 `npm test --prefix ticket-bot-plugin`。
-
-实页验证：目标演出 `26006903` / 场馆 `26000511`，日期 `2026-10-07 19:45`，区域 `004`；后台接口返回 HTTP 200、1,000 个座位，轮询前后保持总览。该区域验证时无余票，真实锁座与实际拼图挑战尚未端到端验证。
-
-批量重构实测：真实插件自动通过场次和本地 OCR 后，将 `001:004`、`001:005` 合并到同一个 `seatStatus` 请求，连续三次返回 HTTP 200。两区均无余票。25 项自动化测试通过；业务说明与实现保持在 [新版业务流程](docs/interpark-onestop-flow.md)。
-
-有票实测：演出 `26010474` / 场馆 `26000166`，2026-10-17 18:00，自动锁定 1 张站立 A 区入场编号 354；`seats/select` 返回 201，进入 `step=price` 后插件自动停止。未提交订单或付款，详见业务流程文档的实页验证记录。
-
-票价自动化续测：同一张已锁票自动选满 `1/1`，继续进入付款页；票价 138,000 韩元、手续费 8,000 韩元，共 146,000 韩元，未付款。已修正实页步进器选满后 `aria-valuemax=0` 的计数判断。
-
-### 页面配置
-
-- 在插件首页点击 `Interpark` 新建卡片，或在已有卡片上点 `编辑`。
-- `演出 ID / 链接` 支持三种格式：
-  - 完整 NOL 链接，例如 `https://world.nol.com/zh-CN/ticket/genre/CONCERT/products/26005759?placeCode=26000413`
-  - `productId?placeCode=placeId`
-  - `placeId/productId`
-- `优先区域` 支持多个区域，用英文逗号分隔，例如 `001,004,025`。脚本会自动把 `1` 补成 `001`。
-- `购票数量` 用于控制锁座和价格页选择的票数。
-- `每轮间隔（毫秒）` 是一轮区域扫描结束后到下一轮的基础等待时间，默认 `2000`。
-- `每轮随机抖动（毫秒）` 会叠加到每轮间隔上，默认 `600`，即实际等待约 `2000~2600ms`。
-- `区域间隔（毫秒）` 是同一轮内从一个区域切到下一个区域前的等待时间，默认 `800`。
-- `无指定区域时每轮最多扫描区域数` 只在 `优先区域` 为空时生效，默认扫页面列表前 `12` 个区域。
-- `只刷前几排座位` 使用座位图视觉排计算，填 `0` 或留空表示不过滤；填 `3` 表示只尝试座位图从上到下前 3 排的可选座。
-- `订购页超时重开（分钟）` 用于处理 Interpark 订购页有效期限制，默认 `9.5` 分钟；超过后会回到 NOL 演出详情页并重新开始订购流程，填 `0` 表示禁用。
-
-### 联系人和确认页
-自动填写联系人等信息
-
-- `取票方式值`：默认可填 `24000`。
-- `联系电话`
-- `手机号`
-- `Messenger 类型`：Wechat 使用 `SN004`。
-- `Messenger ID`
-- `填写确认信息后自动下一步`
-
-姓名、生日、邮箱等账号固定信息不会被插件覆盖，仍以页面已带出的信息为准。
-
-### 运行流程
-
-1. 加载插件后，在 Interpark 卡片中保存演出、区域、轮询、联系人配置。
-2. 打开对应 NOL 演出页。
-3. 在插件首页点击该卡片的 `开始`。
-4. 插件会模拟真实点击进入购票页、选择日期和时间。
-5. 如果进入 `tickets.interpark.com/waiting` 排队页，插件会静默等待站点自动跳转，不会点击、刷新或开始刷座位。
-6. 出现验证码时，优先调用本地 GLM-OCR 服务识别；服务不可用或识别失败时等待人工输入。
-7. 验证通过后，脚本按配置区域轮询座位接口并尝试锁座。
-8. 只有接口锁座成功后，才进入对应座位详情区并点击该座位；接口没锁到时不会进入座位详情区，会等待下一轮。
-9. 选座成功后进入价格、配送确认页，自动填写卡片中的联系人信息，停在支付前流程。
-10. 如果配置了飞书机器人 Webhook，锁座或选座成功会发送包含区域、视觉排、座位号的消息。
-11. 如果订购页运行超过配置的超时时间，会保持运行状态并跳回 NOL 演出详情页，随后自动重新点击购买，开始新的订购窗口。
-
-### 点击方式
-
-Interpark 当前不依赖油猴脚本点击 Next。插件通过 `chrome.scripting.executeScript({ world: "MAIN" })` 在页面主世界执行点击和选座逻辑。
-
-保留的 Tampermonkey 脚本主要用于其它平台或通用弹窗处理；Interpark 专用 `interpark-next-click.user.js` 已移除。
-
-## GLM-OCR 本地验证码服务
-
-本项目使用 [zai-org/GLM-OCR](https://github.com/zai-org/GLM-OCR) 做 Interpark 文字验证码本地识别，并使用 [chenwei-zhao/captcha-recognizer](https://github.com/chenwei-zhao/captcha-recognizer) 做滑块验证码缺口识别。服务运行在本机，插件只请求 `127.0.0.1`；文字验证码服务不可用时会降级为人工输入，滑块验证码服务不可用或依赖缺失时会暂停并发送通知。
-
-### 环境要求
-
-- Windows + PowerShell。
-- Python 虚拟环境：默认路径为仓库根目录下 `.venv`。
-- 建议使用 NVIDIA 显卡和 CUDA 版 PyTorch；CPU 也能启动但识别速度会明显变慢。
-- 需要能访问 Hugging Face 下载 `zai-org/GLM-OCR` 模型；首次启动会下载并加载模型。
-- 滑块识别依赖 [chenwei-zhao/captcha-recognizer](https://github.com/chenwei-zhao/captcha-recognizer)，它会安装 `onnxruntime`、`opencv-python`、`shapely` 等依赖。
-- Chrome 插件需要已包含本地服务和截图权限：`http://127.0.0.1/*`、`http://localhost/*`、`<all_urls>`。
-
-### 安装依赖
-
-如果本地还没有 `.venv`，在仓库根目录执行：
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -U pip
+```text
+请帮我在本机部署并配置抢票插件 EasyConcertKorea：先把 https://github.com/brokenleg13/selfuse-ticket-bot 克隆到当前目录（已存在就 git pull），阅读仓库根目录的 AGENTS.md、docs/debug-guide.md 和 docs/platforms.md 后按文档完成部署——检查 Node.js 并运行 npm ci --prefix ticket-bot-plugin 和 npm test --prefix ticket-bot-plugin；问我要抢哪个平台（Interpark / YES24 / Melon）、演出链接、日期时间、区域、张数，按 docs/platforms.md 帮我整理好卡片每个字段该填什么；问我是否需要验证码识别，需要的话按 docs/captcha-service.md 第 5 节部署本地服务并用 /health 验证；你能自己完成的步骤直接做，必须由我操作的步骤（例如在 Chrome 加载插件、登录购票网站、在插件里填写飞书 Webhook / YES24 用户 ID 等敏感信息、保存卡片、点开始）整理成一份按顺序编号的清单给我，并告诉我每一步做完怎么确认成功；全程不要点击付款或提交订单。
 ```
 
-安装 CUDA 版 PyTorch 时，请按本机 CUDA 版本选择官方 wheel。示例：
+Agent 会自己完成能做的步骤，再把需要你动手的步骤整理成清单给你。之后使用方法：
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-```
-
-安装本地验证码服务所需 Python 包：
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -U transformers accelerate pillow protobuf sentencepiece tiktoken einops captcha-recognizer
-```
-
-### 启动服务
-
-推荐使用仓库内脚本：
-
-```powershell
-.\local-services\start_glm_ocr_service.ps1
-```
-
-也可以直接运行：
-
-```powershell
-.\.venv\Scripts\python.exe local-services\glm_ocr_service.py
-```
-
-默认地址：
-
-- 健康检查：`http://127.0.0.1:17861/health`
-- 文字 OCR 接口：`http://127.0.0.1:17861/ocr`
-- 滑块缺口接口：`http://127.0.0.1:17861/slider`
-- 滑块初始偏移接口：`http://127.0.0.1:17861/slider/offset`
-
-健康检查示例：
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:17861/health
-```
-
-正常返回会包含：
-
-- `ok: true`
-- `model: "zai-org/GLM-OCR"`
-- `sliderEnabled: true`
-- `cuda: true/false`
-- `device`: 当前使用的设备名称
-
-### 插件配置
-
-验证码服务配置在 `ticket-bot-plugin/config/config.js`：
-
-```js
-captchaOcr: {
-    enabled: true,
-    serviceUrl: 'http://127.0.0.1:17861/ocr',
-    sliderServiceUrl: 'http://127.0.0.1:17861/slider',
-    timeoutMs: 3000,
-    retryIntervalMs: 8000,
-    maxAttempts: 3,
-    sliderConfidence: 0.7,
-    invalidRefreshDelayMs: 600,
-    submitCheckDelayMs: 1200,
-    codeLength: 6,
-}
-```
-
-含义：
-
-- `enabled`：是否优先尝试本地 OCR。
-- `serviceUrl`：本地 OCR 服务地址。
-- `sliderServiceUrl`：本地滑块验证码缺口识别服务地址。
-- `timeoutMs`：单次 OCR 请求超时，超时后走人工输入。
-- `retryIntervalMs`：同一张验证码重复识别失败后的重试间隔。
-- `maxAttempts`：最多自动识别次数，超过后等待人工输入。
-- `sliderConfidence`：滑块缺口识别置信度阈值，默认 `0.7`。
-- `invalidRefreshDelayMs`：识别结果非法或页面提示验证码错误后，刷新验证码前后的等待时间。
-- `submitCheckDelayMs`：提交验证码后等待页面反馈的时间。
-- `codeLength`：当前 Interpark 验证码长度，现按 6 位大写英文字母处理。
-
-### 识别和重试策略
-
-- 插件会从验证码图片或页面截图中截取验证码，发送给本地服务。
-- GLM-OCR 返回结果会被规范化成大写英文字母。
-- 如果结果包含数字、少于 6 位，或不是 6 个字母，插件会刷新验证码并重试。
-- 如果页面提示“请重新确认输入的文字”等验证码错误，插件也会刷新验证码并重试。
-- OCR 服务未启动、请求超时、模型报错、超过最大重试次数时，插件会显示等待人工输入，不会阻塞手动操作。
-- 座位图接口返回 `CaptchaOpen` 且页面出现 `captchSlider` 时，插件会截图调用 `/slider`，识别缺口后模拟拖动滑块。
-- `/slider` 返回 `ok: false`、`box` 无效、`confidence` 低于 `sliderConfidence`、服务未启动、或缺少 `captcha-recognizer` 依赖时，插件不会拖动滑块，会保存调试截图、暂停当前任务，并通过已配置的飞书机器人 Webhook 发送暂停通知。
-- 滑块接口会返回 `candidates` 供排查；全图中同时识别到左侧滑块本体和右侧缺口时，服务默认选择右侧缺口作为目标。
-
-### 性能参考
-
-在已加载模型的 GPU 环境下，单张验证码通常约数百毫秒完成；首次启动需要加载模型，耗时会明显更长。实际速度取决于显卡、CUDA/PyTorch 版本和模型缓存状态。
-
-### 注意事项
-
-- 更新插件代码后，需要在 `chrome://extensions/` 重新加载插件。
-- 更新 Tampermonkey 脚本后，需要在 Tampermonkey 面板中同步更新脚本。
-- 如果浏览器扩展 ID 变化，`chrome.storage.sync` 中保存的卡片配置可能看起来像丢失；建议固定使用同一个解压目录加载插件。
-
-## 2025-10-09 update
-### feat:
-- 更新Melon前端刷票
-- 支持配置飞书webhook通知
-
-
-## 2025-08-25 update
-### feat:
-- 更新ThaiTicket抢票助手，增加自定义配置页面和手动启停
-
-### How to use
-- 点击ThaiTicket页面先配置抢票信息
-    - Sections：要抢的分区
-    - Left Right Block：定义分区在舞台左侧还是右侧，用于策略1找到中心座位，不填时默认按座位序号从小到大抢票
-    - 舞台侧面区域：定义哪些是在侧面的，对于侧面舞台优先抢靠舞台内侧的票
-    - Group Size：抢连号用
-    - Refresh Interval：刷新页面间隔时间
-    - 中心排数下限，中心排数上限：定义策略1、2优先抢的座位范围，0-40%则优先筛选前40%的座位查询
-    - 中心列数下限、中心列数上限:定义策略1需要优先筛选的列数，配合Left Right Block可以找到靠近舞台的座位，同样也可以通过只配置这个来选某个区正中间的位置比如配置25%-75%
-    - TimeOut：等待请求超时时间
-    - WebHook：飞书机器人通知地址
-    - 策略：目前定义了三种策略
-
-- 配置完成后点击保存，进入抢票页面在选区页面点击Start即可开始刷票（不要进到具体区的选座页面）
-- 如果刷新过快被判定为脚本需要手动点击任意选区输入验证码解除再回到选区页面重新点Start
-- 抢票成功机器人通知后需要手动去对应选区选座然后进入下一步付款，如果遇到提示座位被锁或者无法进入付款页面多刷新重选一下
-
-
-## 2025-06-27 update
-- 换了个更高效的方法，接口直接爬取座位数据；
-需要打开`ticket-bot-plugin/scripts/yes24/seatv2.js`文件手动填写USERID
-- USERID可在选区接口里查到，idCustomer字段即是
-
-## First Update
-### feat：
-- YES24刷票自用适配版 twice抢票适配
-- 配合油猴脚本实现锁座一直到信用卡付款操作
-- 填写WEBHOOK_URL可实现刷票成功飞书通知
-
-### how to use
-- ticket-bot-plugin文件夹拖到chrome插件安装，按照源项目步骤配置
-- 添加TampermonkeyScript目录下的两个油猴脚本并启用
-- YES24 v1 部分配置项请看 `ticket-bot-plugin/scripts/yes24/seat.js` 文件开头自行修改
-- YES24 v2 需要在 `ticket-bot-plugin/scripts/yes24/seatv2.js` 文件开头填写 `USERID`
-- 点开Booking后进入选座网站将自动运行脚本
-
-## :notebook: Description :notebook:
-
-This Chrome extension streamlines the process of finding and booking concert tickets on popular Korean platforms. such as <a href="https://tkglobal.melon.com/main/index.htm?langCd=EN">Melon Ticket</a>, <a href="http://ticket.yes24.com/English">Yes24</a> and <a href="https://www.globalinterpark.com/?lang=en">Interpark</a>. The extension includes a user-friendly popup with the ability to register for automatic booking. Once a concert page is opened, the extension automates the process, ensuring a hassle-free experience in securing a seat for the event.
-
-> [!NOTE]
-> This extension is designed for use on the global versions of the platforms and may not be compatible with the Korean versions.
-
-## :cd: Usage :cd:
-
-- Clone the repository.
-- Load the extension in Chrome via `chrome://extensions/` and select "Load unpacked."
-- Open the extension popup and register for automatic booking on the global versions of Melon Ticket, Yes24, and Interpark.
-- Upon visiting a supported concert page on the global version of the platforms, the extension automates the booking process.
+- 打开购票页，点卡片上的 `开始`；`接管` 暂停脚本，你自己手动操作；`继续` 恢复；`停止` 会让所有页面都停止。购票页右下角的状态小框会显示当前走到哪一步，也有这几个按钮；需要你动手时会响提示音（插件首页可以试听）。
+- **出问题时**：把购票页地址、现象和状态小框里的文字发给 Agent，让它按 [调试指南](docs/debug-guide.md) 第 3 节连上浏览器自己调试，并交付修好的脚本。可直接复制的指令模板也在那一节。
 
 > [!CAUTION]
-> Using this extension for automated booking may lead to a ban on the respective platforms. It is important to note that the developers of this extension are not responsible for any account bans or consequences that may arise from using the automated booking feature. Use at your own discretion.
+> 使用自动化插件可能导致账号被平台封禁，后果自负。插件只辅助到付款页之前，付款请自己确认。
+> Using this extension for automated booking may lead to a ban on the respective platforms. Use at your own discretion.
 
-## Development
+## 文档
 
-### Popup and Form
-- `form`: HTML, CSS, and JavaScript for the main popup form.
-- `interparkForm`, `melonticketForm`, `yes24Form`: Platform-specific registration forms.
-- `mainPage`: HTML, CSS, and JavaScript for the main extension popup.
+| 文档 | 内容 |
+|---|---|
+| [AGENTS.md](AGENTS.md) | 给 AI Agent 的规则和代码地图（让 Agent 先读这个） |
+| [docs/debug-guide.md](docs/debug-guide.md) | 本地部署、Agent 自助调试（CDP）、适配新购票流程 |
+| [docs/platforms.md](docs/platforms.md) | 各平台卡片字段、运行流程、注意事项 |
+| [docs/incidents.md](docs/incidents.md) | 卡点记录与迭代修复：运行记录、卡点规则、各平台卡点日志 |
+| [docs/captcha-service.md](docs/captcha-service.md) | 验证码识别公共服务：API、部署、换其他 OCR、页面接入方法 |
+| [docs/interpark-onestop-flow.md](docs/interpark-onestop-flow.md) | Interpark 新版流程的完整业务说明 |
 
-### Script for Auto Booking
-- `melonticket`, `yes24`, `thaiticket`: JavaScript logic for executing auto booking on each site.
-- `common`: Utility scripts shared across platforms.
+## 迭代日志
 
-## :camera_flash: Demo video :camera_flash:
+### 2026-11 整改
+- ThaiTicket 停止维护，代码移到 `archive/thaiticket/`；YES24 v1 归档到 `archive/yes24-v1/`。
+- 配置统一到 `ticket-bot-plugin/config/config.js`：各平台默认参数、卡片表单字段、站点/接口地址都在这里，卡片填写的值优先。
+- 新增通用运行框架 `scripts/common/runtime.js`，Melon / YES24 / Interpark 全部接入：
+  - 卡片和状态小框提供 `接管` / `继续` / `停止`，停止和接管会同步到所有页面（包括 Melon 选座弹窗）。
+  - 步骤卡住、页面出现 `try again` 等提示、脚本出错时推送飞书；卡片可以选择推送哪些事件。飞书改由插件后台发送。
+- 状态小框做成组件 `scripts/common/status-panel.js`：显示每个页面声明的状态机步骤（✓ / ▶ / ○）、当前信息、最近的状态切换，需要人操作时高亮。
+- 新增提示音组件 `scripts/common/sound.js`：需要人接管（手动验证码、暂停、自动停止）、卡住、异常、成功时响铃，由插件后台播放，不受购票页自动播放限制。插件首页可以试听。
+- 验证码识别改为可扩展的公共服务：客户端 `scripts/common/captcha-client.js` 加上统一 API。可以换成其他 OCR 或 API 服务，页面接入由使用者的 Agent 自行完成。
+- 不再需要油猴脚本：YES24 的预订按钮改由插件后台在页面环境里点击（`scripts/common/main-world.js`），弹窗屏蔽早已由插件内置。旧油猴脚本已删除。
+- 浏览器弹窗（例如 Melon 的 try again）被自动关闭后会转给插件：命中卡点规则就按规则通知人/暂停/停止，没命中的也会推送并记录（issue #28）。
+- 新增卡点记录机制：运行记录可在插件首页导出；卡点规则写在 `config.js` 的 `platforms.<平台>.rules`；每个平台的卡点日志在 `docs/incidents/`。Agent 按 [docs/incidents.md](docs/incidents.md) 自己补规则和修复。
+- 新增 Agent 文档：`AGENTS.md`、新手调试指南、平台说明。
+
+### 2026-10 Interpark 实页验证
+- 演出 `26006903` / 场馆 `26000511`，`2026-10-07 19:45`，区域 `004`：后台接口返回 HTTP 200，共 1,000 个座位，轮询前后保持总览。验证时无余票。
+- 批量查询：真实插件自动通过场次和本地 OCR 后，把 `001:004`、`001:005` 合并到同一个 `seatStatus` 请求，连续三次返回 HTTP 200。
+- 有票实测：演出 `26010474` / 场馆 `26000166`，2026-10-17 18:00，自动锁定 1 张站立 A 区入场编号 354，进入 `step=price` 后自动停止。
+- 票价自动化续测：同一张票自动选满 `1/1` 并进入付款页（共 146,000 韩元，未付款）。修正了步进器选满后 `aria-valuemax=0` 的计数判断。
+
+### 2026-09 Interpark 新版 Onestop
+- 支持 `tickets.interpark.com/onestop/schedule`、`/onestop/seat`、`/gates/*` 和 `/onestop` 入口，保留旧版 `BookMain.asp` 分支。
+- 后台批量调用 `seatStatus` / `seatMeta`（每批最多 16 个区域），403 时只做一次前台检查，401 停止，429 按要求退避。
+- 预选走页面自带处理函数并做 GraphQL 校验；进入票价页后按锁座数量自动选择票价，到付款页停止。
+- 按钮和验证码使用组件结构选择器，不依赖翻译文案。
+
+### Interpark NOL World
+- 临时加更一集 InterPark，希望 Once 们都能捡到安可票 :D
+- 切换到 NOL World 页面流程，后台刷票，右下角小框显示进度。
+- 本地部署小模型后可以自动识别验证码；不会部署的话，可以让你的 Agent 读文档帮你装好。
+- 卡片支持联系人、确认页自动填写，订购页超时自动重开。
+
+### 2025-10-09
+- 更新 Melon 前端刷票。
+- 支持配置飞书 Webhook 通知。
+
+### 2025-08-25
+- 更新 ThaiTicket 抢票助手，增加自定义配置页面和手动启停（2026-11 起停止维护）。
+
+### 2025-06-27
+- YES24 改为直接调用接口爬取座位数据，效率更高。
+- 需要填写 USERID（idCustomer）；现在在 YES24 卡片里填写。
+
+### First Update
+- YES24 刷票自用适配版，适配 Twice 抢票。
+- 配合油猴脚本实现锁座一直到信用卡付款。
+- 填写 Webhook 可以在刷票成功时发送飞书通知。
+
+## Demo
 
 ![Demo of the chrome extension](./ticket-bot-plugin/assets/demo.gif)
 

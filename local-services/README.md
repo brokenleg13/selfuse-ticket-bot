@@ -1,5 +1,10 @@
 # Local OCR Service
 
+> 完整说明（API 约定、部署、换用其他 OCR、页面接入）见 [docs/captcha-service.md](../docs/captcha-service.md)。
+> This service implements the `ticket-bot-captcha/1` API. `POST /ocr` accepts
+> per-request `codeLength`, `charset` (`upper`/`alpha`/`digits`/`alnum`/`any`)
+> and `prompt`; `GET /health` reports `api` and `capabilities`.
+
 This folder contains the local captcha service used by the Chrome extension for
 Interpark captchas. It supports GLM-OCR text captchas and
 [chenwei-zhao/captcha-recognizer](https://github.com/chenwei-zhao/captcha-recognizer)

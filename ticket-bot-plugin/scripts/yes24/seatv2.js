@@ -1,9 +1,26 @@
-/*--------------------------------- 自定义配置 USERID必填 ---------------------------------*/
-let USERID = ''; // 用户 id，可在 YES24 配置页填写“YES24 用户 ID”
-let MAX_SEAT_ID = 999; // 站票区刷到ID最大值，超过的票不锁  不需要筛ID请填9999
+/*
+ * YES24 选座页：接口轮询配置区域 -> 发现空座直接接口锁座 -> 选座并进入付款。
+ * 所有可调参数的默认值在 config/config.js 的 yes24 段，卡片可覆盖；接口地址在 platforms.yes24.urls。
+ * 启停/接管/通知由 scripts/common/runtime.js 统一处理（见文件末尾 yes24Bot）。
+ */
+let USERID = ''; // 用户 id，从卡片“YES24 用户 ID”读取
+let MAX_SEAT_ID = 999; // 站票区 ID 上限（下方过滤逻辑目前是注释状态，未启用）
 let SINGLE_REQUEST_INTERVAL = 100; // 单个页面请求间隔时间
 let BAN_DURATION = 5 * 60 * 1000; // 黑名单封禁时间 (默认5分钟)
-// let REFRESH_INTERVAL = 600; // 一组页面请求间隔时间
+const YES24_DEFAULTS = window.TicketBotConfig && window.TicketBotConfig.yes24 || {};
+
+function yes24Url(name, values) {
+    return yes24Bot.ctx.url(name, values);
+}
+
+function yes24SeatPageUrl(block) {
+    return yes24Url('seatPage', { idTime: concertcfg.idTime, idHall: concertcfg.idHall, block });
+}
+
+// 过程信息只显示在状态小框；关键结果（成功、停止、需要人工）由 runtime 推送飞书。
+function yes24Status(message) {
+    yes24Bot.ctx.status(message);
+}
 
 
 /*--------------------------------- 勿修改 ---------------------------------*/
@@ -21,9 +38,41 @@ let blockSelect = []; // 自定义选区
 
 let seatFailureMap = {}; // 记录 { seatId: failureCount }
 let seatBlacklist = {}; // 记录 { seatId: unbanTime }
-const MAX_FAILURES = 3;
+let MAX_FAILURES = 3;
+let REQUEST_JITTER_MIN_MS = 50;
+let REQUEST_JITTER_MS = 300;
+let LONG_REST_MIN_MS = 1000;
+let LONG_REST_JITTER_MS = 2000;
+let ANTI_BAN_MIN_MS = 2000;
+let ANTI_BAN_JITTER_MS = 4000;
+let MAX_SEAT_QUEUE_SIZE = 3;
 let needDelay = false;
 let botRunning = false;
+let runGeneration = 0; // 每次开始/继续 +1，让暂停前遗留的循环自动退出
+let stopReason = '';
+
+function isLoopAlive(gen) {
+    return botRunning && !isSuccess && gen === runGeneration;
+}
+
+function getYes24Number(data, key, fallback) {
+    const value = data && data[key];
+    const number = Number(value === undefined || value === "" ? YES24_DEFAULTS[key] : value);
+    return Number.isFinite(number) ? number : fallback;
+}
+
+function applyYes24Config(data) {
+    SINGLE_REQUEST_INTERVAL = getYes24Number(data, "singleRequestIntervalMs", 100);
+    REQUEST_JITTER_MIN_MS = getYes24Number(data, "requestJitterMinMs", 50);
+    REQUEST_JITTER_MS = getYes24Number(data, "requestJitterMs", 300);
+    LONG_REST_MIN_MS = getYes24Number(data, "longRestMinMs", 1000);
+    LONG_REST_JITTER_MS = getYes24Number(data, "longRestJitterMs", 2000);
+    ANTI_BAN_MIN_MS = getYes24Number(data, "antiBanMinMs", 2000);
+    ANTI_BAN_JITTER_MS = getYes24Number(data, "antiBanJitterMs", 4000);
+    BAN_DURATION = getYes24Number(data, "banDurationMinutes", 5) * 60 * 1000;
+    MAX_FAILURES = getYes24Number(data, "maxFailures", 3);
+    MAX_SEAT_QUEUE_SIZE = getYes24Number(data, "maxSeatQueueSize", 3);
+}
 
 // region 队列
 let seatQueue = [];// 可选座位队列
@@ -108,13 +157,18 @@ async function selectDate(data) {
     return hasDate;
 }
 
-// 触发TampermonkeyClick事件
-function TampermonkeyClick() {
-    // 直接触发自定义事件，而不是依赖storage事件
-    const clickEvent = new CustomEvent('tampermonkey-click', {
-        detail: { timestamp: Date.now() }
-    });
-    window.dispatchEvent(clickEvent);
+// 点击选座 iframe 里的“预订”按钮。这个按钮要在页面环境里点击才生效，
+// 由插件后台注入执行（scripts/common/main-world.js），不再需要油猴脚本。
+async function clickBookingButton() {
+    const meta = window.TicketBotConfig && window.TicketBotConfig.platforms && window.TicketBotConfig.platforms.yes24 || {};
+    const selector = meta.selectors && meta.selectors.bookingButton || 'img.booking[src*="btn_booking2.gif"]';
+    const result = await TicketBotMainWorld.click(selector, { frameIndex: 0 });
+    if (result.success) {
+        yes24Status('已点击预订按钮');
+    } else {
+        yes24Bot.ctx.needHuman(`没有点到预订按钮，请手动点击（${result.error || '未知原因'}）`);
+    }
+    return result.success;
 }
 
 
@@ -286,10 +340,8 @@ async function chooseSeatAndGotoPayment(block, seatId) {
             seat.click();
         }
         await sleep(500);
-        // while(!assertLockSuccess()){
-        TampermonkeyClick();
+        await clickBookingButton();
         await sleep(1000);
-        // }
     }
 }
 // endregion
@@ -309,14 +361,14 @@ async function sendSearchSeatRequest(block) {
         return;
     }
 
-    const url = 'https://ticket.yes24.com/OSIF/Book.asmx/GetBookWholeFN';
+    const url = yes24Url('bookWhole');
     let cookie = getCookie();
 
     console.log(`[DEBUG] Cookie长度: ${cookie ? cookie.length : 0}`);
     console.log(`[DEBUG] URL: ${url}`);
 
     const targetUrl = url;
-    const refererUrl = `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`
+    const refererUrl = yes24SeatPageUrl(block);
 
     // Add the rule before sending the request
     await new Promise(resolve => {
@@ -352,7 +404,7 @@ async function sendSearchSeatRequest(block) {
         'User-Agent': navigator.userAgent,
         'Accept': 'application/xml, text/xml, */*; q=0.01',
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Origin': 'https://ticket.yes24.com',
+        'Origin': yes24Url('origin'),
         'Accept-Encoding': 'gzip, deflate',
         'Accept-Language': 'zh-CN,zh;q=0.9',
         'Cookie': cookie
@@ -390,7 +442,7 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
 
     console.log(`[DEBUG] 开始发送Lock请求，区块: ${block} 座位ID: ${seatId}`);
 
-    const url = 'https://ticket.yes24.com/OSIF/Book.asmx/Lock';
+    const url = yes24Url('lock');
     let cookie = getCookie();
 
     console.log(`[DEBUG] Cookie长度: ${cookie ? cookie.length : 0}`);
@@ -408,7 +460,7 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
     console.log(`[DEBUG] 请求体:`, body.toString());
 
     const targetUrl = url;
-    const refererUrl = `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`
+    const refererUrl = yes24SeatPageUrl(block);
 
     // Add the rule before sending the request
     await new Promise(resolve => {
@@ -433,8 +485,8 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
         'User-Agent': navigator.userAgent,
         'Accept': 'application/xml, text/xml, */*; q=0.01',
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Origin': 'https://ticket.yes24.com',
-        'Referer': `https://ticket.yes24.com/Pages/English/Sale/FnPerfSaleHtmlSeat.aspx?idTime=${concertcfg.idTime}&idHall=${concertcfg.idHall}&block=${block}&stMax=10&pHCardAppOpt=0`,
+        'Origin': yes24Url('origin'),
+        'Referer': yes24SeatPageUrl(block),
         'Accept-Encoding': 'gzip, deflate',
         'Accept-Language': 'zh-CN,zh;q=0.9',
         'Cookie': cookie
@@ -463,10 +515,10 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
             successBlock = block;
             successId = seatId;
             console.log(`[YES24 Success] 座位锁定成功: ${seatId}`);
-            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位接口锁定成功: block:${block} seat:${seatId}`);
+            yes24Status(`锁座成功：区域 ${block}，座位 ${seatId}`);
         } else if (code === 'block') {
             console.error(`[YES24 Error] 被block 需要验证码`);
-            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]被block: block:${block} seat:${seatId}`);
+            yes24Status(`锁座被拦截：区域 ${block}，座位 ${seatId}`);
             isSuccess = true;
         } else {
             console.error(`[YES24 Error] 锁定失败: Code=${code}, Message=${message}`);
@@ -480,16 +532,17 @@ async function sendSeatLockRequest(block, seatId, sendmsg = false) {
                 const unbanTime = Date.now() + BAN_DURATION;
                 seatBlacklist[seatId] = unbanTime;
                 console.warn(`[Blacklist] Seat ${seatId} failed ${seatFailureMap[seatId]} times. Banned for ${BAN_DURATION} ms.`);
-                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}] Seat ${seatId} 加入黑名单 (${BAN_DURATION/(1000*60)} 分钟). 失败次数: ${seatFailureMap[seatId]}`);
+                yes24Status(`座位 ${seatId} 失败 ${seatFailureMap[seatId]} 次，${BAN_DURATION/(1000*60)} 分钟内不再尝试`);
             }
 
             if (sendmsg) {
-                sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]锁定失败: block:${block} seat:${seatId} Code=${code} Message=${message}`);
+                yes24Status(`锁座失败：区域 ${block}，座位 ${seatId}（${code} ${message}）`);
+                yes24Bot.ctx.observe('api', `Lock ${code} ${message}`);
             }
         }
     } catch (error) {
         console.error(`[YES24 Error] Lock请求失败:`, error);
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]Lock请求失败: block:${block} seat:${seatId} Error=${error.message}`);
+        yes24Status(`锁座请求出错：区域 ${block}，座位 ${seatId}（${error.message}）`);
     } finally {
         chrome.runtime.sendMessage({ action: 'removeRefererRule' }, response => {
             if (response && response.success) {
@@ -552,6 +605,9 @@ function parseResponse(xmlString) {
     // 获取 Block 值
     const blockMatch = xmlString.match(/<Block>(.*?)<\/Block>/);
     const blockValue = blockMatch ? blockMatch[1] : null;
+    if (blockValue === '-1' || blockValue === 'deny') {
+        yes24Bot.ctx.observe('api', `Block=${blockValue}`);
+    }
 
     if (blockValue === '-1') {
         const delay = Math.floor(Math.random() * 2000) + 1000; // 1000-3000ms
@@ -562,7 +618,7 @@ function parseResponse(xmlString) {
 
     if (blockValue === 'deny') {
         console.error('[YES24 Error]检测到Block值为deny，可能已被封禁！停止刷票。');
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]已被封禁 (Block=deny)，停止刷票！`);
+        stopReason = '已被封禁（Block=deny），已停止刷票';
         isSuccess = true; // 设置成功标志以停止循环（虽然是失败情况，但目的是停下来）
         return;
     }
@@ -602,10 +658,9 @@ function parseResponse(xmlString) {
 
                     let seatElementIdx = layoutSortById["t" + seatId];
                     if (!sendedIdList[seatId]) {
-                        if (seatQueue.length > 2) {
+                        if (seatQueue.length >= MAX_SEAT_QUEUE_SIZE) {
                             return;
                         }
-                        // sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]刷到座位 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
                         sendedIdList[seatId] = true;
                     }
                     // 检查是否站票超过ID最大值
@@ -616,12 +671,12 @@ function parseResponse(xmlString) {
 
                     if (!isSuccess) {
                         if (chooseable == "0") {
-                            if (seatQueue.length > 2) {
+                            if (seatQueue.length >= MAX_SEAT_QUEUE_SIZE) {
                                 return;
                             }
                             console.log(`[YES24 info] chooseable==0 发现空座，直接接口锁定: block:${block} seat:${seatId},index:${seatElementIdx},seatInfo:${seatInfo}`);
                             addSeatToQueue(seat);
-                            sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]刷到空座，直接接口锁定 block:${block} seat:${seatId} index:${seatElementIdx},seatInfo:${seatInfo}`)
+                            yes24Status(`发现空座，接口锁座中：区域 ${block}，座位 ${seatId}`)
                         }
                     }
                 }
@@ -633,14 +688,14 @@ function parseResponse(xmlString) {
 
 
 // 独立的异步任务：模拟用户随机行为
-async function startAntiBanSimulation() {
+async function startAntiBanSimulation(gen) {
     console.log('[Anti-Ban] 启动随机行为模拟协程');
-    while (botRunning && !isSuccess) {
-        // 随机等待 2-10 秒执行一次动作，避免过于频繁
-        const waitTime = Math.floor(Math.random() * 4000) + 2000;
+    while (isLoopAlive(gen)) {
+        // 随机等待一段时间执行一次动作，避免过于频繁
+        const waitTime = Math.floor(Math.random() * ANTI_BAN_JITTER_MS) + ANTI_BAN_MIN_MS;
         await sleep(waitTime);
 
-        if (!botRunning || isSuccess) break;
+        if (!isLoopAlive(gen)) break;
 
         const actionType = Math.floor(Math.random() * 3);
         if (actionType === 0) {
@@ -681,19 +736,19 @@ async function startAntiBanSimulation() {
 
 //region 主流程
 // producer：搜索可用座位添加到列表
-async function searchSeat() {
+async function searchSeat(gen) {
     getUserInfo();
 
     let i = 0;
     let loopCount = 0;
     await sleep(1000);
     // 一直循环遍历blockSelect
-    while (botRunning && !isSuccess) {
+    while (isLoopAlive(gen)) {
         if (seatQueue.length > 0) {
             await sleep(50);
             continue;
         }
-        if (!botRunning || isSuccess) {
+        if (!isLoopAlive(gen)) {
             break;
         }
 
@@ -701,15 +756,15 @@ async function searchSeat() {
         sendSearchSeatRequest(blockSelect[i]);
         i = (i + 1) % blockSelect.length;
 
-        // 基础随机延时：在 SINGLE_REQUEST_INTERVAL 基础上增加 50-150ms 的波动
-        let randomDelay = Math.floor(Math.random() * 300) + 50;
+        // 基础随机延时：在 SINGLE_REQUEST_INTERVAL 基础上增加配置的波动
+        let randomDelay = Math.floor(Math.random() * REQUEST_JITTER_MS) + REQUEST_JITTER_MIN_MS;
         await sleep(SINGLE_REQUEST_INTERVAL + randomDelay);
 
         loopCount++;
         // 每 15-30 次请求，进行一次较长时间的“休息”（1-3秒），模拟人类行为
         if (loopCount % (Math.floor(Math.random() * 15) + 15) === 0 || needDelay) {
             needDelay = false;
-            let longRest = Math.floor(Math.random() * 2000) + 1000;
+            let longRest = Math.floor(Math.random() * LONG_REST_JITTER_MS) + LONG_REST_MIN_MS;
             console.log(`[Anti-Ban] 模拟用户休息，暂停 ${longRest}ms`);
             await sleep(longRest);
         }
@@ -734,50 +789,45 @@ function resetRuntimeState() {
     seatQueue = [];
 }
 
-async function main(startConfig) {
+async function main(data, gen) {
     concertId = getConcertId();
-    let data = startConfig || await get_stored_value(concertId);
-    if (!data) {
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]获取演出信息失败`);
-        console.log('❌ 获取演出信息失败');
-        return;
-    }
     WEBHOOK_URL = data["feishu-bot-id"];
     USERID = data["customer-id"] || USERID;
     concertcfg.idCustomer = USERID;
-    blockSelect = data.section
+    applyYes24Config(data);
+    blockSelect = Array.isArray(data.section) ? data.section : [];
     console.log(blockSelect);
     if (!concertcfg.idCustomer) {
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]YES24 用户 ID 为空，请先在 YES24 配置页填写`);
-        console.log('❌ YES24 用户 ID 为空，请先在 YES24 配置页填写');
-        return;
+        return 'YES24 用户 ID 为空，请先在 YES24 配置页填写';
     }
     if (blockSelect.length == 0) {
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]座位区域为空，请配置座位区域`);
-        console.log('❌ 座位区域为空，请配置座位区域');
-        return;
+        return '座位区域为空，请配置座位区域';
     }
+    yes24Bot.ctx.setState('select_date', data.date || '');
     await sleep(3000);
     var hasDate = await selectDate(data);
-    if (!botRunning) {
-        return;
+    if (!isLoopAlive(gen)) {
+        return '';
     }
     if (!hasDate) {
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]日期选择失败 请手动选择日期`);
-        console.log('❌ 日期选择失败 请手动选择日期');
+        yes24Bot.ctx.needHuman('日期选择失败，请手动选择日期');
     }
-    // while(!assertSeatPageOpen()){
-    //     await sleep(500);
-    // }
     await sleep(3000);
-    searchSeat(); // 启动爬虫
+    yes24Bot.ctx.setState('scanning', blockSelect.join(','));
+    searchSeat(gen); // 启动爬虫
     selectRange(1);
     // 启动并行的随机行为模拟任务（不await，让它在后台跑）
-    startAntiBanSimulation();
-    while (botRunning && !isSuccess) {
+    startAntiBanSimulation(gen);
+    let lastHeartbeat = 0;
+    while (isLoopAlive(gen)) {
+        if (Date.now() - lastHeartbeat > 10000) {
+            lastHeartbeat = Date.now();
+            yes24Bot.ctx.status(`轮询区域 ${blockSelect.join(',')}，待锁队列 ${seatQueue.length}`);
+        }
         if (seatQueue.length > 0) {
             let seat = getSeatFromQueue();
             if (seat) {
+                yes24Bot.ctx.setState('locking', `${seat.block}/${seat.id}`);
                 await sendSeatLockRequest(seat.block, seat.id, true)
             }
             popSeatFromQueue();
@@ -786,9 +836,12 @@ async function main(startConfig) {
             await sleep(50);
         }
     }
+    if (gen !== runGeneration) {
+        return '';
+    }
     // 接口锁成功的处理一下选座
     if (successBlock && successId) {
-        sendFeiShuMsg(WEBHOOK_URL, `[${new Date().toLocaleString()}]抢票成功 successBlock:${successBlock} successId:${successId}`);
+        yes24Bot.ctx.setState('payment', `${successBlock}/${successId}`);
         await chooseSeatAndGotoPayment(successBlock, successId);
         await sleep(1000);
         clickStepCtrlBtn03();
@@ -797,72 +850,43 @@ async function main(startConfig) {
         await sleep(1000);
         openPayment();
     }
+    return '';
 }
 
-async function startBot(config) {
-    if (botRunning) {
-        return;
-    }
-
-    resetRuntimeState();
-    botRunning = true;
-    await main(config);
-    botRunning = false;
-    markRunStateStopped();
-}
-
-function stopBot() {
-    botRunning = false;
-    isSuccess = true;
-    markRunStateStopped();
-    console.log('[YES24] Ticket bot stopped.');
-}
-
-function markRunStateStopped() {
-    const storageKeys = window.TicketBotConfig && window.TicketBotConfig.storageKeys;
-    const runStateKey = storageKeys ? storageKeys.botRunState : 'ticketBotRunState';
-    store_value(runStateKey, {
-        running: false,
-        platform: 'yes24',
-        concertId,
-    });
-}
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    const actions = window.TicketBotConfig && window.TicketBotConfig.actions;
-    const startAction = actions ? actions.startBot : 'startTicketBot';
-    const stopAction = actions ? actions.stopBot : 'stopTicketBot';
-
-    if (request.action === startAction && (!request.platform || request.platform === 'yes24')) {
-        startBot(request.config);
-        sendResponse({ status: 'started' });
-        return true;
-    }
-
-    if (request.action === stopAction && (!request.platform || request.platform === 'yes24')) {
-        stopBot();
-        sendResponse({ status: 'stopped' });
-        return true;
-    }
+// ---------- 生命周期（由 scripts/common/runtime.js 统一管理） ----------
+const yes24Bot = TicketBotRuntime.createBot({
+    platform: 'yes24',
+    getConcertId: () => getConcertId(),
+    states: [
+        { key: 'select_date', label: '选择日期' },
+        { key: 'scanning', label: '接口轮询区域' },
+        { key: 'locking', label: '接口锁座' },
+        { key: 'payment', label: '选座并进入付款' },
+    ],
+    onStart: async (ctx, gen) => {
+        resetRuntimeState();
+        stopReason = '';
+        runGeneration += 1;
+        const myGen = runGeneration;
+        botRunning = true;
+        const problem = await main(ctx.config || {}, myGen);
+        if (!ctx.isActive(gen) || myGen !== runGeneration) {
+            return; // 已被停止/暂停/重新开始
+        }
+        botRunning = false;
+        if (successBlock && successId) {
+            await ctx.success(`锁座成功：区域 ${successBlock}，座位 ${successId}，已跳转付款，请尽快完成支付`);
+        } else {
+            await ctx.stop(problem || stopReason || '流程结束');
+        }
+    },
+    onHalt: () => {
+        botRunning = false;
+        runGeneration += 1;
+    },
 });
 
-async function startFromRunState() {
-    const storageKeys = window.TicketBotConfig && window.TicketBotConfig.storageKeys;
-    const runStateKey = storageKeys ? storageKeys.botRunState : 'ticketBotRunState';
-    const runState = await get_stored_value(runStateKey);
-    if (!runState || !runState.running || runState.platform !== 'yes24') {
-        return;
-    }
-
-    const currentConcertId = getConcertId();
-    if (runState.concertId && currentConcertId && runState.concertId !== currentConcertId) {
-        return;
-    }
-
-    startBot(runState.config);
-}
-
-startFromRunState();
+yes24Bot.autoStart();
 
 // endregion
 

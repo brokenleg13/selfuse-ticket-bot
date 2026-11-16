@@ -15,17 +15,35 @@
 
     const blockedHandler = null;
     const nativeAddEventListener = EventTarget.prototype.addEventListener;
+    // 弹窗被屏蔽后，把内容转给顶层页面的插件脚本（runtime 收到后按卡点规则通知人、写运行记录）。
+    // 用 postMessage 是因为本脚本运行在页面环境，且可能在 iframe 里。
+    function reportDialog(type, message) {
+        try {
+            window.top.postMessage({
+                source: "ticket-bot-dialog",
+                type,
+                message: message == null ? "" : String(message).slice(0, 500),
+                frame: location.pathname,
+            }, "*");
+        } catch (error) {
+            // ignore
+        }
+    }
+
     const popupHandlers = {
         alert(message) {
             log(`Blocked alert: ${message == null ? "" : String(message)}`);
+            reportDialog("alert", message);
             return undefined;
         },
         confirm(message) {
             log(`Blocked confirm: ${message == null ? "" : String(message)}`);
+            reportDialog("confirm", message);
             return true;
         },
         prompt(message, defaultText) {
             log(`Blocked prompt: ${message == null ? "" : String(message)}`);
+            reportDialog("prompt", message);
             return defaultText || "";
         },
     };

@@ -223,6 +223,14 @@ a {
     background-color: #28a745;
 }
 
+.pause-action {
+    background-color: #d97706;
+}
+
+.resume-action {
+    background-color: #2563eb;
+}
+
 .stop-action {
     background-color: #dc3545;
 }
@@ -280,4 +288,22 @@ a {
 
 .list-booking-container::-webkit-scrollbar-thumb:hover {
     background-color: #5438dc; /* Thumb color on hover */
+}
+
+.sound-test-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+    margin: -6px 0 8px;
+}
+
+.sound-test {
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    color: #2f056b;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 4px 8px;
 }

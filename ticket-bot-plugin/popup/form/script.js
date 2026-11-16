@@ -5,21 +5,8 @@ const storageKeys = config.storageKeys || { autoBooking: "autoBooking" };
 const params = new URLSearchParams(window.location.search);
 const editId = params.get("editId");
 const platformParam = params.get("platform");
-const preserveEmptyFields = new Set([
-    "refreshIntervalMs",
-    "refreshJitterMs",
-    "areaScanIntervalMs",
-    "maxAreaClicksPerRefresh",
-    "maxSeatRow",
-    "bookingSessionTimeoutMinutes",
-    "delivery",
-    "phoneNo",
-    "mobileNo",
-    "snsChannel",
-    "snsId",
-    "autoNext",
-    "customer-id",
-]);
+// 编辑卡片时这些字段留空不会覆盖旧值；字段清单来自 config.js（platforms.*.fields + commonFields）。
+const preserveEmptyFields = config.getAllFieldKeys ? config.getAllFieldKeys() : new Set();
 
 window.onclick = function(event) {
     const target = event.target;
